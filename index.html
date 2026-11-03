@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LowerTMM10 Tools</title>
+    <meta name="description" content="A collection of aircraft and signal analysis tools.">
+    <!-- Tailwind CSS (shared config) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="doppler_detector/tailwind.config.js"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Original global styles -->
+    <link rel="stylesheet" href="doppler_detector/global.css">
+</head>
+<body class="min-h-screen flex flex-col font-sans">
+
+    <!-- Header -->
+    <header class="bg-panelbg border-b border-slate-800 px-6 py-3 flex items-center justify-between shadow-lg">
+        <div class="flex items-center space-x-3">
+            <div class="p-2 bg-cyan-500/10 border border-cyan-500/30 rounded-lg text-cyan-400">
+                <i class="fa-solid fa-toolbox text-xl"></i>
+            </div>
+            <div>
+                <h1 class="text-lg font-bold tracking-wide text-slate-100 flex items-center gap-2">
+                    Tools <span class="text-xs px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-mono border border-cyan-500/30">LowerTMM10</span>
+                </h1>
+                <p class="text-xs text-slate-400">Aircraft & signal analysis toolkit</p>
+            </div>
+        </div>
+        <span id="toolCount" class="text-xs text-slate-400 font-mono"></span>
+    </header>
+
+    <main class="flex-1 w-full max-w-6xl mx-auto p-6 space-y-6">
+        <!-- Search -->
+        <div class="relative">
+            <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500 text-sm"></i>
+            <input id="toolSearch" type="text" placeholder="Search tools..." autocomplete="off"
+                class="w-full bg-slate-900/80 border border-slate-800 rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-200 placeholder-slate-500 font-mono focus:outline-none focus:border-cyan-500/50">
+        </div>
+
+        <!-- Tool cards are rendered here by home.js -->
+        <div id="toolGrid" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"></div>
+        <p id="noResults" class="hidden text-center text-sm text-slate-500 font-mono py-10">No tools match your search.</p>
+    </main>
+
+    <footer class="border-t border-slate-800 px-6 py-3 text-[11px] text-slate-500 font-mono text-center">
+        <span id="year"></span> · LowerTMM10
+    </footer>
+
+    <script src="home.js"></script>
+</body>
+</html>
