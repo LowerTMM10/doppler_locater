@@ -226,30 +226,76 @@ function evalFit(pts, v, d, t0) {
     return { f0, v, dmin: d, t0, sse };
 }
 
+
+// Precise Doppler fit for any set of {t, f} points.
+// Wide coarse search (speed, closest distance on a log scale, time of closest
+// approach — also slightly outside the points), then Nelder-Mead polishing.
+// The base frequency f0 is solved exactly for each guess.
+function fitDopplerPoints(pts) {
+    if (pts.length < 3) return null;
+    const tStart = pts[0].t, tEnd = pts[pts.length - 1].t;
+    const span = Math.max(0.5, tEnd - tStart);
+    let best = null;
+    for (let v = 15; v <= 350; v += 10)
+        for (let k = 0; k < 30; k++) {
+            const d = 20 * Math.pow(8000 / 20, k / 29);
+            for (let j = 0; j <= 40; j++) {
+                const t0 = tStart - span * 0.3 + (span * 1.6 * j) / 40;
+                const r = evalFit(pts, v, d, t0);
+                if (!best || r.sse < best.sse) best = r;
+            }
+        }
+
+    // Nelder-Mead on (v, log d, t0)
+    const cost = (x) => {
+        const v = x[0], d = Math.exp(x[1]);
+        if (v < 3 || v > 400 || d < 5 || d > 20000) return Infinity;
+        return evalFit(pts, v, d, x[2]).sse;
+    };
+    let simplex = [[best.v, Math.log(best.dmin), best.t0]];
+    const steps = [5, 0.2, span * 0.03];
+    for (let i = 0; i < 3; i++) { const x = simplex[0].slice(); x[i] += steps[i]; simplex.push(x); }
+    let vals = simplex.map(cost);
+    for (let it = 0; it < 400; it++) {
+        const order = [0, 1, 2, 3].sort((a, b) => vals[a] - vals[b]);
+        simplex = order.map(i => simplex[i]); vals = order.map(i => vals[i]);
+        const c = [0, 1, 2].map(i => (simplex[0][i] + simplex[1][i] + simplex[2][i]) / 3);
+        const pt = (t) => c.map((ci, i) => ci + t * (simplex[3][i] - ci));
+        const xr = pt(-1), fr = cost(xr);
+        if (fr < vals[0]) {
+            const xe = pt(-2), fe = cost(xe);
+            if (fe < fr) { simplex[3] = xe; vals[3] = fe; } else { simplex[3] = xr; vals[3] = fr; }
+        } else if (fr < vals[2]) { simplex[3] = xr; vals[3] = fr; }
+        else {
+            const xc = pt(0.5), fc = cost(xc);
+            if (fc < vals[3]) { simplex[3] = xc; vals[3] = fc; }
+            else for (let i = 1; i < 4; i++) { simplex[i] = simplex[i].map((x, k) => simplex[0][k] + 0.5 * (x - simplex[0][k])); vals[i] = cost(simplex[i]); }
+        }
+    }
+    const x = simplex[0];
+    const r = evalFit(pts, x[0], Math.exp(x[1]), x[2]);
+    return r.sse <= best.sse ? r : best;
+}
+
+// Manual clicked points use the same precise fitter
+fitDopplerCurve = function () {
+    const fit = fitDopplerPoints(state.plottedPoints);
+    if (!fit) return;
+    state.fittedParams = { f0: fit.f0, v: fit.v, dmin: fit.dmin, t0: fit.t0 };
+    f0Display.textContent = `${Math.round(fit.f0)} Hz`;
+    speedDisplay.textContent = `${Math.round(fit.v * 3.6)} km/h (${Math.round(fit.v)} m/s)`;
+    dminDisplay.textContent = `${Math.round(fit.dmin)} m`;
+    t0Display.textContent = `${fit.t0.toFixed(2)} s`;
+};
+
 function fitRidge(points) {
     if (points.length < 8) return null;
     let pts = points;
     if (pts.length > 120) { const k = pts.length / 120; pts = Array.from({ length: 120 }, (_, i) => points[Math.floor(i * k)]); }
 
     let tStart = pts[0].t, tEnd = pts[pts.length - 1].t;
-    let best = null;
     const tStep = Math.max(0.05, (tEnd - tStart) / 60);
-    for (let v = 30; v <= 300; v += 10)
-        for (let d = 50; d <= 2000; d += 75)
-            for (let t0 = tStart; t0 <= tEnd; t0 += tStep) {
-                const r = evalFit(pts, v, d, t0);
-                if (!best || r.sse < best.sse) best = r;
-            }
-    // Local refinement
-    let sv = 5, sd = 37, st = tStep / 2;
-    for (let it = 0; it < 6; it++, sv /= 2, sd /= 2, st /= 2) {
-        for (const dv of [-sv, 0, sv]) for (const dd of [-sd, 0, sd]) for (const dtt of [-st, 0, st]) {
-            const v = best.v + dv, d = best.dmin + dd;
-            if (v < 5 || d < 10) continue;
-            const r = evalFit(pts, v, d, best.t0 + dtt);
-            if (r.sse < best.sse) best = r;
-        }
-    }
+    let best = fitDopplerPoints(pts);
 
     // Robust step: drop outliers (> 3x median residual) and refine once more
     const res = pts.map(p => Math.abs(best.f0 * dopplerShape(p.t, best.v, best.dmin, best.t0) - p.f));
@@ -257,16 +303,7 @@ function fitRidge(points) {
     const kept = pts.filter((_, i) => res[i] <= Math.max(5, 3 * mad));
     if (kept.length >= 8 && kept.length < pts.length) {
         pts = kept;
-        let sv2 = 4, sd2 = 30, st2 = tStep;
-        best = evalFit(pts, best.v, best.dmin, best.t0);
-        for (let it = 0; it < 8; it++, sv2 /= 2, sd2 /= 2, st2 /= 2) {
-            for (const dv of [-sv2, 0, sv2]) for (const dd of [-sd2, 0, sd2]) for (const dtt of [-st2, 0, st2]) {
-                const v = best.v + dv, d = best.dmin + dd;
-                if (v < 5 || d < 10) continue;
-                const r = evalFit(pts, v, d, best.t0 + dtt);
-                if (r.sse < best.sse) best = r;
-            }
-        }
+        best = fitDopplerPoints(pts);
     }
     cleanup.ridge = pts;
 
