@@ -3,6 +3,7 @@ import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { SpectrogramViewer } from './components/SpectrogramViewer';
 import { HomeDirectory } from './components/HomeDirectory';
+import { ColstoHeatmapFinder } from './components/ColstoHeatmapFinder';
 import {
   CleanupSettings,
   DopplerPoint,
@@ -23,7 +24,7 @@ import {
 } from './dsp/fitting';
 
 export const App: React.FC = () => {
-  const [currentView, setCurrentView] = useState<'aerodoppler' | 'home'>('aerodoppler');
+  const [currentView, setCurrentView] = useState<'aerodoppler' | 'colsto' | 'home'>('aerodoppler');
 
   // Audio Context & Buffer
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -561,8 +562,20 @@ export const App: React.FC = () => {
         onSelectTool={(toolId) => {
           if (toolId === 'aerodoppler') {
             setCurrentView('aerodoppler');
+          } else if (toolId === 'colsto') {
+            setCurrentView('colsto');
           }
         }}
+      />
+    );
+  }
+
+  if (currentView === 'colsto') {
+    return (
+      <ColstoHeatmapFinder
+        onBackToSpectrogram={() => setCurrentView('aerodoppler')}
+        fittedParams={fittedParams}
+        recordedPoints={plottedPoints}
       />
     );
   }
@@ -571,6 +584,7 @@ export const App: React.FC = () => {
     <div className="h-screen w-screen flex flex-col font-sans overflow-hidden bg-darkbg text-slate-200">
       <Header
         onBackToDirectory={() => setCurrentView('home')}
+        onOpenColstoFinder={() => setCurrentView('colsto')}
         onFileUpload={handleFileUpload}
         onGenerateDemo={handleGenerateDemo}
         onToggleMic={handleToggleMic}
@@ -606,6 +620,7 @@ export const App: React.FC = () => {
           plottedPointsCount={plottedPoints.length}
           fittedParams={fittedParams}
           onClearPoints={handleClearPoints}
+          onOpenColsto={() => setCurrentView('colsto')}
         />
 
         <SpectrogramViewer

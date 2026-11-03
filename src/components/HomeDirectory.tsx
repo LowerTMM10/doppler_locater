@@ -17,13 +17,13 @@ const TOOLS: ToolItem[] = [
     status: 'live',
   },
   {
-    id: 'adsb_matcher',
-    name: 'ADS-B Correlator',
-    tag: 'RADAR OSINT',
-    description: 'Match extracted audio Doppler flight profiles with crowdsourced ADS-B transponder flight tracks to identify aircraft tail numbers.',
+    id: 'colsto',
+    name: 'Colsto Geolocation Heatmap',
+    tag: 'WASM DSP',
+    description: 'Invert aircraft Doppler curves against ADS-B flight trajectories to generate spatial ground observer likelihood heatmaps (Rust/WASM).',
     icon: 'radio',
     color: 'emerald',
-    status: 'soon',
+    status: 'live',
   },
   {
     id: 'acoustic_rf',

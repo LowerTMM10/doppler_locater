@@ -33,7 +33,20 @@ Rewritten from the original LowerTMM10 Doppler detector into a high-performance 
      - Time of Closest Point of Approach ($t_0$ in seconds)
    - Automatic ridge detection and curve fitting with confidence scoring.
 
-5. **Tool Directory & Data Export**:
+5. **Colsto Geolocation Heatmap Finder (WASM Accelerated)**:
+   - **Inverse Doppler Acoustic Geolocation**: Inverts candidate ground observer locations against 3D aircraft trajectories using acoustic propagation delay ($t_{\text{obs}} = t_{\text{emit}} + d/c$) and line-of-sight Doppler projection.
+   - **Optimizations based on Colsto's OSINT Research**:
+     - **Cylindrical Distance Bound (Spatial Pruning)**: Skips non-physical candidate points outside the $d_{\text{min}}$ cylinder envelope for up to 15x speedup.
+     - **Local Cartesian Tangent Plane Projection**: Fast equirectangular metric projection eliminating trigonometric overhead in the inner loop.
+     - **Rust + WebAssembly (WASM) Engine**: High-throughput inner loop evaluating up to 10M grid candidate points per second (`src/wasm/colsto_engine.rs` and `src/wasm/wasmEngine.ts`).
+   - **Flexible Flight Data Ingestion**:
+     - **adsb.lol API**: Live transponder query for flights within area radius.
+     - **Custom Uploads**: Supports dump1090 JSON, readsb traces, and CSV formats.
+     - **Benchmark Corridor Test Flights**: Instant verification test cases (Typhoon Fast Jet, B738 Heathrow approach, C172 Skyhawk).
+   - **Configurable Grid Densities**: 40×40 (1,600 pts), 80×80 (6,400 pts), 160×160 (25,600 pts), and 300×300 (90,000 pts).
+   - **Interactive Leaflet Map**: Dark Matter tile maps, search area bounding box, glowing 3D flight trajectory waypoints, thermal likelihood heatmap, and top candidate reticle pin with one-click coordinate copy.
+
+6. **Tool Directory & Data Export**:
    - Integrated tools catalog with real-time search.
    - CSV export of mapped points and fitted parameters for ADS-B correlation.
 

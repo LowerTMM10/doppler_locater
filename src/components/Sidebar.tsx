@@ -48,6 +48,7 @@ interface SidebarProps {
   plottedPointsCount: number;
   fittedParams: FittedParams | null;
   onClearPoints: () => void;
+  onOpenColsto: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -75,6 +76,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   plottedPointsCount,
   fittedParams,
   onClearPoints,
+  onOpenColsto,
 }) => {
   const timeSpan = view.t1 - view.t0;
   const viewInfoStr = `${timeSpan >= 60 ? formatTime(timeSpan) : `${timeSpan.toFixed(1)}s`} · ${Math.round(
@@ -436,6 +438,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </span>
           </div>
         </div>
+
+        <button
+          onClick={onOpenColsto}
+          className="w-full bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 font-semibold py-2 rounded-lg text-xs flex items-center justify-center gap-1.5 transition cursor-pointer shadow-lg shadow-emerald-500/10"
+        >
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span>Geolocate Flight (Colsto Heatmap)</span>
+        </button>
       </div>
     </aside>
   );

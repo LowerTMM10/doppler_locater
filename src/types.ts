@@ -49,3 +49,67 @@ export interface ToolItem {
   color: 'cyan' | 'emerald' | 'violet' | 'rose';
   status: 'live' | 'soon';
 }
+
+export interface FlightWaypoint {
+  timestamp: number; // UTC unix seconds or relative seconds
+  lat: number;
+  lon: number;
+  alt: number; // meters AMSL
+  groundSpeed: number; // m/s
+  track?: number; // degrees
+  callsign?: string;
+  hex?: string;
+}
+
+export interface FlightTrajectory {
+  id: string;
+  callsign: string;
+  hex: string;
+  type?: string;
+  waypoints: FlightWaypoint[];
+  startTime: number;
+  endTime: number;
+}
+
+export interface SearchArea {
+  minLat: number;
+  maxLat: number;
+  minLon: number;
+  maxLon: number;
+}
+
+export interface ColstoCandidate {
+  lat: number;
+  lon: number;
+  score: number;
+  dmin: number;
+  tcpa: number;
+  distToTrack: number;
+}
+
+export interface ColstoSearchResult {
+  gridScores: Float32Array; // row-major flat array of scores [0..1]
+  gridDmin: Float32Array;
+  gridTcpa: Float32Array;
+  cols: number;
+  rows: number;
+  searchArea: SearchArea;
+  topLocation: ColstoCandidate;
+  topCandidates: ColstoCandidate[];
+  executionTimeMs: number;
+  evaluationsCount: number;
+  engineUsed: 'wasm' | 'vector_js';
+  theoreticalCurve: DopplerPoint[];
+}
+
+export interface ColstoSettings {
+  useWasm: boolean;
+  gridResolution: number; // 40, 80, 160, 300
+  searchRadiusKm: number; // 10, 25, 50, 100
+  spatialPruning: boolean; // Colsto cylinder pruning
+  elevationModel: boolean;
+  soundSpeed: number; // 343 m/s
+  sigmaDist: number; // distance tolerance in meters (e.g. 50m)
+  sigmaTime: number; // time tolerance in seconds (e.g. 1.0s)
+}
+
