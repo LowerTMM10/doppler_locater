@@ -6,45 +6,47 @@ import {
   ColstoSettings,
   DopplerPoint,
   FittedParams,
+  FlightMatchResult,
   FlightTrajectory,
+  MultiFlightSearchResult,
   SearchArea,
 } from '../types';
 import {
   BENCHMARK_FLIGHTS,
   fetchAdsbLol,
-  parseCustomAdsbFile,
+  parseCustomAdsbFiles,
 } from '../services/adsbService';
-import { runColstoGeolocationSearch } from '../wasm/wasmEngine';
+import { runColstoGeolocationSearch, runColstoMultiFlightSearch } from '../wasm/wasmEngine';
 import {
-  Play,
-  RotateCcw,
   Zap,
   MapPin,
-  Download,
   Upload,
   Globe,
   Radio,
   Sliders,
   CheckCircle2,
-  ExternalLink,
   Copy,
-  Info,
   Calendar,
-  Clock,
   Layers,
   ArrowLeft,
+  Plane,
+  ChevronRight,
+  TrendingUp,
+  Activity,
+  Wrench,
 } from 'lucide-react';
 
 interface ColstoHeatmapFinderProps {
+  onBackToDirectory?: () => void;
   onBackToSpectrogram: () => void;
   fittedParams: FittedParams | null;
   recordedPoints: DopplerPoint[];
 }
 
 export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
+  onBackToDirectory,
   onBackToSpectrogram,
   fittedParams,
-  recordedPoints,
 }) => {
   // Doppler Target parameters (syncable from AeroDoppler or manually adjustable)
   const [targetParams, setTargetParams] = useState<FittedParams>(() => {
@@ -57,9 +59,9 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
     };
   });
 
-  // Flight Data Source
+  // Flight Data Source & Pool
   const [sourceType, setSourceType] = useState<'benchmark' | 'adsblol' | 'upload'>('benchmark');
-  const [selectedBenchmarkId, setSelectedBenchmarkId] = useState<string>('typhoon_salisbury');
+  const [selectedBenchmarkId, setSelectedBenchmarkId] = useState<string>('all_benchmarks');
   const [trajectories, setTrajectories] = useState<FlightTrajectory[]>(BENCHMARK_FLIGHTS);
   const [selectedTrajectory, setSelectedTrajectory] = useState<FlightTrajectory>(BENCHMARK_FLIGHTS[0]);
   const [isLoadingAdsb, setIsLoadingAdsb] = useState(false);
@@ -71,15 +73,12 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
   const [timeWindowMin, setTimeWindowMin] = useState(15);
 
   // Search Area (lat/lon bounds)
-  const [searchArea, setSearchArea] = useState<SearchArea>(() => {
-    // Default Salisbury military test corridor
-    return {
-      minLat: 51.0500,
-      maxLat: 51.2200,
-      minLon: -1.9800,
-      maxLon: -1.7200,
-    };
-  });
+  const [searchArea, setSearchArea] = useState<SearchArea>(() => ({
+    minLat: 51.0500,
+    maxLat: 51.2800,
+    minLon: -2.0500,
+    maxLon: -1.6500,
+  }));
 
   // Settings & Optimization
   const [settings, setSettings] = useState<ColstoSettings>({
@@ -93,9 +92,11 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
     sigmaTime: 0.8,
   });
 
-  // Calculation Results
+  // Calculation Results (Multi-Flight Correlation)
   const [isCalculating, setIsCalculating] = useState(false);
-  const [searchResult, setSearchResult] = useState<ColstoSearchResult | null>(null);
+  const [multiResult, setMultiResult] = useState<MultiFlightSearchResult | null>(null);
+  const [activeFlightMatch, setActiveFlightMatch] = useState<FlightMatchResult | null>(null);
+  const [heatmapMode, setHeatmapMode] = useState<'best' | 'composite'>('best');
   const [copiedCoords, setCopiedCoords] = useState(false);
 
   // Map Tile Style (OpenStreetMap & Satellite)
@@ -115,8 +116,8 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
     if (!mapContainerRef.current || mapInstanceRef.current) return;
 
     const map = L.map(mapContainerRef.current, {
-      center: [51.1300, -1.8500],
-      zoom: 12,
+      center: [51.1500, -1.8500],
+      zoom: 11,
       zoomControl: true,
     });
 
@@ -159,7 +160,7 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors',
       });
     } else {
-      // OpenStreetMap with Dark Filter (No API limits or third-party quota)
+      // OpenStreetMap with Dark Filter (Zero third-party limit)
       layer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
         className: 'map-tiles-dark',
@@ -171,66 +172,84 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
     baseTileLayerRef.current = layer;
   }, [mapStyle]);
 
-  // Update Flight Path Layer on Map when Trajectory changes
+  // Render ALL Flight Paths on the Map (Selected in Cyan, Others in subtle lines)
   useEffect(() => {
     const map = mapInstanceRef.current;
     const flightGroup = flightPathLayerRef.current;
-    if (!map || !flightGroup || !selectedTrajectory) return;
+    if (!map || !flightGroup || trajectories.length === 0) return;
 
     flightGroup.clearLayers();
 
-    const latlngs: [number, number][] = selectedTrajectory.waypoints.map((wp) => [wp.lat, wp.lon]);
-    if (latlngs.length < 2) return;
+    const allBounds = L.latLngBounds([]);
 
-    // Glowing cyan flight path polyline
-    const polyline = L.polyline(latlngs, {
-      color: '#00f2fe',
-      weight: 3.5,
-      opacity: 0.9,
-      lineCap: 'round',
-    }).addTo(flightGroup);
+    trajectories.forEach((traj) => {
+      const isSelected = selectedTrajectory && traj.id === selectedTrajectory.id;
+      const latlngs: [number, number][] = traj.waypoints.map((wp) => [wp.lat, wp.lon]);
+      if (latlngs.length < 2) return;
 
-    // Waypoints markers
-    selectedTrajectory.waypoints.forEach((wp, idx) => {
-      const isMid = idx === Math.floor(selectedTrajectory.waypoints.length / 2);
-      const icon = L.divIcon({
-        className: 'custom-wp-icon',
-        html: `<div style="background-color: ${
-          isMid ? '#ef4444' : '#00f2fe'
-        }; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #0f172a; box-shadow: 0 0 6px ${
-          isMid ? '#ef4444' : '#00f2fe'
-        };"></div>`,
-        iconSize: [8, 8],
-        iconAnchor: [4, 4],
+      latlngs.forEach((ll) => allBounds.extend(ll));
+
+      // Draw flight line
+      const polyline = L.polyline(latlngs, {
+        color: isSelected ? '#00f2fe' : '#64748b',
+        weight: isSelected ? 3.5 : 2,
+        opacity: isSelected ? 0.95 : 0.45,
+        dashArray: isSelected ? undefined : '4, 4',
+      }).addTo(flightGroup);
+
+      polyline.bindTooltip(
+        `<b>${traj.callsign}</b> (${traj.type || 'Aircraft'}) · ${Math.round(
+          traj.waypoints[0].groundSpeed * 3.6
+        )} km/h`,
+        { permanent: false, sticky: true }
+      );
+
+      // If selected flight, draw waypoints
+      if (isSelected) {
+        traj.waypoints.forEach((wp, idx) => {
+          const isMid = idx === Math.floor(traj.waypoints.length / 2);
+          const icon = L.divIcon({
+            className: 'custom-wp-icon',
+            html: `<div style="background-color: ${
+              isMid ? '#ef4444' : '#00f2fe'
+            }; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #0f172a; box-shadow: 0 0 6px ${
+              isMid ? '#ef4444' : '#00f2fe'
+            };"></div>`,
+            iconSize: [8, 8],
+            iconAnchor: [4, 4],
+          });
+
+          const marker = L.marker([wp.lat, wp.lon], { icon }).addTo(flightGroup);
+          marker.bindPopup(`
+            <div style="font-family: monospace; font-size: 11px; color: #1e293b;">
+              <strong>${traj.callsign} — WP #${idx + 1}</strong><br/>
+              Time: ${wp.timestamp.toFixed(1)}s<br/>
+              Altitude: ${Math.round(wp.alt)} m (${Math.round(wp.alt * 3.28084)} ft)<br/>
+              Speed: ${Math.round(wp.groundSpeed * 3.6)} km/h (${Math.round(wp.groundSpeed)} m/s)<br/>
+              Track: ${Math.round(wp.track || 0)}°
+            </div>
+          `);
+        });
+      }
+    });
+
+    // Adjust search bounds if valid
+    if (allBounds.isValid()) {
+      const latSpan = Math.max(0.08, allBounds.getNorth() - allBounds.getSouth());
+      const lonSpan = Math.max(0.08, allBounds.getEast() - allBounds.getWest());
+
+      setSearchArea({
+        minLat: allBounds.getSouth() - latSpan * 0.35,
+        maxLat: allBounds.getNorth() + latSpan * 0.35,
+        minLon: allBounds.getWest() - lonSpan * 0.35,
+        maxLon: allBounds.getEast() + lonSpan * 0.35,
       });
 
-      const marker = L.marker([wp.lat, wp.lon], { icon }).addTo(flightGroup);
-      marker.bindPopup(`
-        <div style="font-family: monospace; font-size: 11px; color: #1e293b;">
-          <strong>Waypoint #${idx + 1}</strong><br/>
-          Time: ${wp.timestamp.toFixed(1)}s<br/>
-          Altitude: ${Math.round(wp.alt)} m (${Math.round(wp.alt * 3.28084)} ft)<br/>
-          Speed: ${Math.round(wp.groundSpeed * 3.6)} km/h (${Math.round(wp.groundSpeed)} m/s)<br/>
-          Track: ${Math.round(wp.track || 0)}°
-        </div>
-      `);
-    });
-
-    // Fit map bounds to flight
-    map.fitBounds(polyline.getBounds(), { padding: [40, 40] });
-
-    // Update search area to enclose flight with buffer
-    const bounds = polyline.getBounds();
-    const latSpan = bounds.getNorth() - bounds.getSouth();
-    const lonSpan = bounds.getEast() - bounds.getWest();
-
-    setSearchArea({
-      minLat: bounds.getSouth() - latSpan * 0.4,
-      maxLat: bounds.getNorth() + latSpan * 0.4,
-      minLon: bounds.getWest() - lonSpan * 0.4,
-      maxLon: bounds.getEast() + lonSpan * 0.4,
-    });
-  }, [selectedTrajectory]);
+      if (!multiResult) {
+        map.fitBounds(allBounds, { padding: [40, 40] });
+      }
+    }
+  }, [trajectories, selectedTrajectory]);
 
   // Update Search Area Rectangle on Map
   useEffect(() => {
@@ -257,24 +276,29 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
     searchBoundsLayerRef.current = rect;
   }, [searchArea]);
 
-  // Render Heatmap overlay onto Leaflet map when searchResult changes
+  // Render Heatmap overlay onto Leaflet map (Selected flight or Composite)
   useEffect(() => {
     const map = mapInstanceRef.current;
     const markerGroup = markerLayerRef.current;
     if (!map || !markerGroup) return;
 
-    // Remove existing heatmap overlay
     if (heatmapLayerRef.current) {
       map.removeLayer(heatmapLayerRef.current);
       heatmapLayerRef.current = null;
     }
     markerGroup.clearLayers();
 
-    if (!searchResult) return;
+    if (!multiResult) return;
 
-    const { gridScores, cols, rows, searchArea: area, topLocation } = searchResult;
+    const scoresToRender =
+      heatmapMode === 'composite'
+        ? multiResult.compositeScores
+        : activeFlightMatch?.searchResult.gridScores || multiResult.bestMatch?.searchResult.gridScores;
 
-    // Create offscreen canvas to generate heatmap image
+    if (!scoresToRender) return;
+
+    const { cols, rows, searchArea: area } = multiResult;
+
     const canvas = document.createElement('canvas');
     canvas.width = cols;
     canvas.height = rows;
@@ -285,19 +309,16 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
     const pixels = imgData.data;
 
     for (let r = 0; r < rows; r++) {
-      // Leaflet image overlay expects North at top (row 0), South at bottom
       const srcRow = rows - 1 - r;
       for (let c = 0; c < cols; c++) {
-        const val = gridScores[srcRow * cols + c];
+        const val = scoresToRender[srcRow * cols + c];
         const pixelIdx = (r * cols + c) * 4;
 
         if (val < 0.02) {
-          // Transparent
           pixels[pixelIdx + 3] = 0;
           continue;
         }
 
-        // Color thermal ramp: transparent -> deep blue -> violet -> red -> yellow -> white
         let red = 0, green = 0, blue = 0, alpha = Math.min(235, Math.floor(val * 240 + 40));
 
         if (val < 0.25) {
@@ -345,8 +366,11 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
 
     heatmapLayerRef.current = overlay;
 
-    // Add Top Candidate Marker
-    if (topLocation && topLocation.score > 0.05) {
+    // Pin Location Marker for active flight
+    const topLoc = activeFlightMatch?.topLocation || multiResult.bestMatch?.topLocation;
+    const topFlight = activeFlightMatch?.trajectory || multiResult.bestMatch?.trajectory;
+
+    if (topLoc && topLoc.score > 0.05) {
       const topIcon = L.divIcon({
         className: 'top-candidate-marker',
         html: `
@@ -361,43 +385,47 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
         iconAnchor: [14, 14],
       });
 
-      const topMarker = L.marker([topLocation.lat, topLocation.lon], { icon: topIcon }).addTo(markerGroup);
+      const topMarker = L.marker([topLoc.lat, topLoc.lon], { icon: topIcon }).addTo(markerGroup);
 
       topMarker
         .bindPopup(
           `
-          <div style="font-family: monospace; font-size: 12px; color: #0f172a; min-width: 180px;">
+          <div style="font-family: monospace; font-size: 12px; color: #0f172a; min-width: 200px;">
             <div style="font-weight: bold; color: #059669; border-bottom: 1px solid #cbd5e1; padding-bottom: 4px; margin-bottom: 6px;">
               📍 MOST LIKELY RECORDING LOCATION
             </div>
-            <div><strong>Latitude:</strong> ${topLocation.lat.toFixed(5)}°</div>
-            <div><strong>Longitude:</strong> ${topLocation.lon.toFixed(5)}°</div>
-            <div><strong>Est. CPA Distance:</strong> ${Math.round(topLocation.dmin)} m</div>
-            <div><strong>Est. CPA Time:</strong> ${topLocation.tcpa.toFixed(2)} s</div>
-            <div><strong>Confidence:</strong> ${(topLocation.score * 100).toFixed(1)}%</div>
+            <div><strong>Matched Flight:</strong> ${topFlight?.callsign} (${topFlight?.type || 'Plane'})</div>
+            <div><strong>Coordinates:</strong> ${topLoc.lat.toFixed(5)}°, ${topLoc.lon.toFixed(5)}°</div>
+            <div><strong>Est. CPA Distance:</strong> ${Math.round(topLoc.dmin)} m</div>
+            <div><strong>Est. CPA Time:</strong> ${topLoc.tcpa.toFixed(2)} s</div>
+            <div><strong>Match Score:</strong> ${(activeFlightMatch?.matchScore || 0).toFixed(1)}%</div>
           </div>
         `
         )
         .openPopup();
     }
-  }, [searchResult]);
+  }, [multiResult, activeFlightMatch, heatmapMode]);
 
-  // Execute Colsto Geolocation Search
+  // Execute Colsto Geolocation Search Across ALL Flights in the Region
   const handleRunSearch = async () => {
     setIsCalculating(true);
     setCopiedCoords(false);
 
     try {
-      // Small timeout to allow UI loading state to paint
       await new Promise((r) => setTimeout(r, 40));
 
-      const res = await runColstoGeolocationSearch(
-        selectedTrajectory,
+      const res = await runColstoMultiFlightSearch(
+        trajectories,
         targetParams,
         searchArea,
         settings
       );
-      setSearchResult(res);
+
+      setMultiResult(res);
+      if (res.bestMatch) {
+        setActiveFlightMatch(res.bestMatch);
+        setSelectedTrajectory(res.bestMatch.trajectory);
+      }
     } catch (err) {
       alert(`Search failed: ${(err as Error).message}`);
     } finally {
@@ -414,31 +442,33 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
     }
   };
 
-  // Fetch from adsb.lol API
+  // Fetch from adsb.lol API (with Proxy and CORS fallback)
   const handleFetchAdsbLol = async () => {
     setIsLoadingAdsb(true);
-    setAdsbStatusMsg('Querying adsb.lol API...');
+    setAdsbStatusMsg('Scanning airspace via adsb.lol...');
 
     try {
       const centerLat = (searchArea.minLat + searchArea.maxLat) / 2;
       const centerLon = (searchArea.minLon + searchArea.maxLon) / 2;
-      const res = await fetchAdsbLol(centerLat, centerLon, settings.searchRadiusKm * 0.539957);
+      const { trajectories: list, sourceNotice } = await fetchAdsbLol(
+        centerLat,
+        centerLon,
+        settings.searchRadiusKm * 0.539957
+      );
 
-      if (res.length > 0) {
-        setTrajectories(res);
-        setSelectedTrajectory(res[0]);
-        setAdsbStatusMsg(`Successfully loaded ${res.length} aircraft flights from adsb.lol!`);
-      } else {
-        setAdsbStatusMsg('No aircraft found in this radius right now. Loaded fallback corridor.');
+      if (list.length > 0) {
+        setTrajectories(list);
+        setSelectedTrajectory(list[0]);
+        setAdsbStatusMsg(sourceNotice);
       }
     } catch (err) {
-      setAdsbStatusMsg(`adsb.lol query failed (${(err as Error).message}). Using benchmark flight.`);
+      setAdsbStatusMsg(`adsb.lol query failed: ${(err as Error).message}. Try uploading custom flight data.`);
     } finally {
       setIsLoadingAdsb(false);
     }
   };
 
-  // Custom File Upload
+  // Custom File Upload (supports multiple flights in one file)
   const handleCustomFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -447,10 +477,10 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
     reader.onload = (ev) => {
       try {
         const text = ev.target?.result as string;
-        const traj = parseCustomAdsbFile(text, file.name);
-        setTrajectories([traj]);
-        setSelectedTrajectory(traj);
-        alert(`Loaded flight trajectory "${traj.callsign}" with ${traj.waypoints.length} waypoints.`);
+        const list = parseCustomAdsbFiles(text, file.name);
+        setTrajectories(list);
+        setSelectedTrajectory(list[0]);
+        alert(`Successfully imported ${list.length} flight trajectories from ${file.name}!`);
       } catch (err) {
         alert(`File error: ${(err as Error).message}`);
       }
@@ -462,16 +492,23 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
   // Benchmark Flight Selection
   const handleSelectBenchmark = (id: string) => {
     setSelectedBenchmarkId(id);
-    const f = BENCHMARK_FLIGHTS.find((b) => b.id === id);
-    if (f) {
-      setSelectedTrajectory(f);
+    if (id === 'all_benchmarks') {
+      setTrajectories(BENCHMARK_FLIGHTS);
+      setSelectedTrajectory(BENCHMARK_FLIGHTS[0]);
+    } else {
+      const f = BENCHMARK_FLIGHTS.find((b) => b.id === id);
+      if (f) {
+        setTrajectories([f]);
+        setSelectedTrajectory(f);
+      }
     }
   };
 
   // Copy coordinates
   const handleCopyCoords = () => {
-    if (!searchResult?.topLocation) return;
-    const text = `${searchResult.topLocation.lat.toFixed(6)}, ${searchResult.topLocation.lon.toFixed(6)}`;
+    const topLoc = activeFlightMatch?.topLocation || multiResult?.bestMatch?.topLocation;
+    if (!topLoc) return;
+    const text = `${topLoc.lat.toFixed(6)}, ${topLoc.lon.toFixed(6)}`;
     navigator.clipboard.writeText(text);
     setCopiedCoords(true);
     setTimeout(() => setCopiedCoords(false), 2000);
@@ -482,28 +519,41 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
       {/* Top Header */}
       <header className="bg-panelbg border-b border-slate-800 px-4 sm:px-6 py-2.5 flex items-center justify-between shadow-lg z-30 shrink-0">
         <div className="flex items-center space-x-3">
+          {onBackToDirectory && (
+            <button
+              onClick={onBackToDirectory}
+              title="Back to All Tools"
+              className="p-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-slate-300 transition flex items-center justify-center cursor-pointer gap-1.5 text-xs font-mono"
+            >
+              <Wrench className="w-4 h-4 text-cyan-400" />
+              <span className="hidden sm:inline">Tools</span>
+            </button>
+          )}
+
           <button
             onClick={onBackToSpectrogram}
-            title="Back to AeroDoppler Spectrogram"
-            className="p-2 bg-cyan-500/10 border border-cyan-500/30 rounded-lg text-cyan-400 hover:bg-cyan-500/20 transition duration-150 flex items-center justify-center cursor-pointer"
+            title="Open AeroDoppler Spectrogram Analyzer"
+            className="p-2 bg-cyan-500/10 border border-cyan-500/30 rounded-lg text-cyan-400 hover:bg-cyan-500/20 transition flex items-center justify-center cursor-pointer gap-1.5 text-xs font-mono"
           >
-            <ArrowLeft className="w-5 h-5" />
+            <Activity className="w-4 h-4" />
+            <span className="hidden md:inline">Spectrogram</span>
           </button>
+
           <div>
             <h1 className="text-base sm:text-lg font-bold tracking-wide text-slate-100 flex items-center gap-2">
-              Colsto Geolocation Heatmap Finder{' '}
+              Colsto Geolocation Heatmap{' '}
               <span className="text-[10px] sm:text-xs px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 font-mono border border-rose-500/30">
-                WASM ACCELERATED
+                MULTI-FLIGHT WASM
               </span>
             </h1>
             <p className="text-[11px] sm:text-xs text-slate-400">
-              Acoustic Flight Path Matching &amp; Ground Observer Heatmap Inversion
+              Regional Airspace Doppler Correlation &amp; Ground Observer Heatmap Inversion
             </p>
           </div>
         </div>
 
         <div className="flex items-center space-x-2">
-          {searchResult && (
+          {multiResult && (
             <button
               onClick={handleCopyCoords}
               className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-medium px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 transition cursor-pointer"
@@ -519,12 +569,16 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
             className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold px-4 py-1.5 rounded-lg text-xs flex items-center gap-1.5 transition duration-150 shadow-lg shadow-emerald-500/20 cursor-pointer disabled:opacity-50"
           >
             <Zap className={`w-3.5 h-3.5 fill-current ${isCalculating ? 'animate-spin' : ''}`} />
-            <span>{isCalculating ? 'Calculating Heatmap...' : 'Run Colsto Finder'}</span>
+            <span>
+              {isCalculating
+                ? `Correlating ${trajectories.length} Flights...`
+                : `Correlate All ${trajectories.length} Area Flights`}
+            </span>
           </button>
         </div>
       </header>
 
-      {/* Main Body: Map on Left/Center, Settings Panel on Right */}
+      {/* Main Body */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left: Map Visualization Area */}
         <div className="flex-1 relative flex flex-col overflow-hidden bg-slate-950">
@@ -567,39 +621,120 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
             </button>
           </div>
 
-          {/* Floating Performance / Result Overlay Badge */}
-          {searchResult && (
-            <div className="absolute top-4 left-4 z-20 bg-slate-900/90 backdrop-blur-md border border-slate-800 rounded-xl p-3 shadow-2xl max-w-sm text-xs font-mono space-y-1.5 pointer-events-auto">
-              <div className="flex items-center justify-between pb-1 border-b border-slate-800">
+          {/* Floating Flight Correlation Leaderboard Badge */}
+          {multiResult && (
+            <div className="absolute top-4 left-4 z-20 bg-slate-900/95 backdrop-blur-md border border-slate-800 rounded-xl p-3.5 shadow-2xl w-80 text-xs font-mono space-y-2 pointer-events-auto max-h-[85vh] flex flex-col">
+              <div className="flex items-center justify-between pb-1.5 border-b border-slate-800 shrink-0">
                 <span className="text-emerald-400 font-bold flex items-center gap-1.5">
-                  <MapPin className="w-3.5 h-3.5" /> Best Recording Location
+                  <TrendingUp className="w-3.5 h-3.5" /> Regional Flight Matches ({multiResult.matches.length})
                 </span>
                 <span className="text-[10px] bg-cyan-500/20 text-cyan-300 px-1.5 py-0.5 rounded border border-cyan-500/30">
-                  {searchResult.engineUsed === 'wasm' ? 'RUST WASM' : 'VECTOR JS'}
+                  {multiResult.engineUsed === 'wasm' ? 'WASM' : 'VECTOR JS'} · {multiResult.executionTimeMs.toFixed(0)}ms
                 </span>
               </div>
-              <div className="flex justify-between text-slate-300">
-                <span>Coordinates:</span>
-                <span className="text-cyan-400 font-bold">
-                  {searchResult.topLocation.lat.toFixed(5)}°, {searchResult.topLocation.lon.toFixed(5)}°
-                </span>
+
+              {/* Heatmap Mode Toggle */}
+              <div className="grid grid-cols-2 gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800 text-[10px] shrink-0">
+                <button
+                  onClick={() => setHeatmapMode('best')}
+                  className={`py-1 rounded transition ${
+                    heatmapMode === 'best'
+                      ? 'bg-cyan-500/20 text-cyan-300 font-bold'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Selected Flight Heatmap
+                </button>
+                <button
+                  onClick={() => setHeatmapMode('composite')}
+                  className={`py-1 rounded transition ${
+                    heatmapMode === 'composite'
+                      ? 'bg-cyan-500/20 text-cyan-300 font-bold'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  All-Flight Composite
+                </button>
               </div>
-              <div className="flex justify-between text-slate-300">
-                <span>Closest Distance (d_min):</span>
-                <span className="text-amber-400 font-bold">{Math.round(searchResult.topLocation.dmin)} m</span>
+
+              {/* Ranked Matches List */}
+              <div className="overflow-y-auto space-y-1.5 pr-1 flex-1">
+                {multiResult.matches.map((m) => {
+                  const isCur = selectedTrajectory && m.trajectory.id === selectedTrajectory.id;
+                  return (
+                    <div
+                      key={m.trajectory.id}
+                      onClick={() => {
+                        setSelectedTrajectory(m.trajectory);
+                        setActiveFlightMatch(m);
+                      }}
+                      className={`p-2 rounded-lg border transition cursor-pointer flex items-center justify-between gap-2 ${
+                        isCur
+                          ? 'bg-cyan-500/15 border-cyan-500/50 text-cyan-200 shadow-md'
+                          : 'bg-slate-950/80 border-slate-800/80 text-slate-300 hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 overflow-hidden">
+                        <span
+                          className={`w-5 h-5 rounded flex items-center justify-center font-bold text-[10px] shrink-0 ${
+                            m.rank === 1
+                              ? 'bg-emerald-500 text-slate-950'
+                              : m.rank === 2
+                              ? 'bg-cyan-500 text-slate-950'
+                              : 'bg-slate-800 text-slate-400'
+                          }`}
+                        >
+                          #{m.rank}
+                        </span>
+                        <div className="truncate">
+                          <div className="font-bold flex items-center gap-1.5">
+                            <span>{m.trajectory.callsign}</span>
+                            <span className="text-[10px] text-slate-500">({m.trajectory.hex})</span>
+                          </div>
+                          <div className="text-[10px] text-slate-400 truncate">
+                            {m.trajectory.type || 'Plane'} · Δv {Math.round(m.speedDiff * 3.6)} km/h
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="text-right shrink-0">
+                        <span
+                          className={`font-bold block ${
+                            m.matchScore > 75
+                              ? 'text-emerald-400'
+                              : m.matchScore > 40
+                              ? 'text-cyan-400'
+                              : 'text-slate-500'
+                          }`}
+                        >
+                          {m.matchScore.toFixed(0)}%
+                        </span>
+                        <span className="text-[9px] text-slate-500">d:{Math.round(m.dmin)}m</span>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-              <div className="flex justify-between text-slate-300">
-                <span>CPA Time (t_cpa):</span>
-                <span className="text-slate-200">{searchResult.topLocation.tcpa.toFixed(2)} s</span>
-              </div>
-              <div className="flex justify-between text-slate-300">
-                <span>Match Likelihood:</span>
-                <span className="text-emerald-400 font-bold">{(searchResult.topLocation.score * 100).toFixed(1)}%</span>
-              </div>
-              <div className="pt-1 border-t border-slate-800/80 text-[10px] text-slate-400 flex justify-between">
-                <span>Evaluated: {searchResult.evaluationsCount.toLocaleString()} pts</span>
-                <span className="text-cyan-300">{searchResult.executionTimeMs.toFixed(1)} ms</span>
-              </div>
+
+              {/* Best Location Summary Footer */}
+              {activeFlightMatch && (
+                <div className="pt-2 border-t border-slate-800 text-[11px] space-y-1 shrink-0">
+                  <div className="flex justify-between text-slate-400">
+                    <span>Observer Coordinates:</span>
+                    <span className="text-cyan-400 font-bold">
+                      {activeFlightMatch.topLocation.lat.toFixed(5)}°, {activeFlightMatch.topLocation.lon.toFixed(5)}°
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-slate-400">
+                    <span>Closest Distance (d_min):</span>
+                    <span className="text-amber-400 font-bold">{Math.round(activeFlightMatch.dmin)} m</span>
+                  </div>
+                  <div className="flex justify-between text-slate-400">
+                    <span>CPA Time (t_cpa):</span>
+                    <span className="text-slate-200">{activeFlightMatch.tcpa.toFixed(2)} s</span>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -607,11 +742,11 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
           <div className="absolute bottom-4 left-4 z-20 bg-slate-900/85 backdrop-blur border border-slate-800 px-3 py-2 rounded-lg text-[10px] font-mono text-slate-300 flex items-center gap-4">
             <div className="flex items-center gap-1.5">
               <span className="w-3 h-0.5 bg-cyan-400 inline-block"></span>
-              <span>Flight Trajectory</span>
+              <span>Selected Flight</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block"></span>
-              <span>CPA Trajectory Point</span>
+              <span className="w-3 h-0.5 border-b border-dashed border-slate-500 inline-block"></span>
+              <span>Other Flights in Region</span>
             </div>
             <div className="flex items-center gap-1.5">
               <div className="w-16 h-2 rounded bg-gradient-to-r from-blue-900 via-rose-500 to-white inline-block"></div>
@@ -678,10 +813,13 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
             </div>
           </div>
 
-          {/* Section 2: Flight Data Source (adsb.lol vs Custom Upload vs Benchmarks) */}
+          {/* Section 2: Regional Flight Data Ingestion */}
           <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-3.5 space-y-3">
-            <h3 className="font-semibold text-slate-300 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
-              <Radio className="w-3.5 h-3.5 text-emerald-400" /> Aircraft Trajectory Source
+            <h3 className="font-semibold text-slate-300 uppercase tracking-wider text-[11px] flex items-center justify-between">
+              <span className="flex items-center gap-1.5">
+                <Radio className="w-3.5 h-3.5 text-emerald-400" /> Regional Airspace ({trajectories.length} Flights)
+              </span>
+              <span className="text-[10px] text-cyan-400 font-mono">Multi-Flight Search</span>
             </h3>
 
             {/* Source Type Selector */}
@@ -692,7 +830,7 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
                   sourceType === 'benchmark' ? 'bg-cyan-500/20 text-cyan-300 font-semibold' : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                Preset Flight
+                Presets ({BENCHMARK_FLIGHTS.length})
               </button>
               <button
                 onClick={() => setSourceType('adsblol')}
@@ -712,25 +850,28 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
               </button>
             </div>
 
-            {/* Sub-panels for selected source */}
+            {/* Presets */}
             {sourceType === 'benchmark' && (
               <div className="space-y-2">
-                <label className="text-[11px] text-slate-400 block">Select Benchmark Corridor:</label>
+                <label className="text-[11px] text-slate-400 block">Flight Corridor Set:</label>
                 <select
                   value={selectedBenchmarkId}
                   onChange={(e) => handleSelectBenchmark(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-lg p-2 focus:ring-1 focus:ring-cyan-500 font-mono"
                 >
-                  <option value="typhoon_salisbury">Typhoon Fast Jet (Salisbury Plain, UK)</option>
-                  <option value="b738_heathrow">Boeing 737-800 Approach (Heathrow, UK)</option>
-                  <option value="c172_cambridge">Cessna 172 Skyhawk (Cambridge, UK)</option>
+                  <option value="all_benchmarks">All Benchmark Flights ({BENCHMARK_FLIGHTS.length} Flights)</option>
+                  <option value="typhoon_salisbury">Typhoon Fast Jet (Salisbury Plain)</option>
+                  <option value="b738_heathrow">Boeing 737-800 (Heathrow Approach)</option>
+                  <option value="c172_cambridge">Cessna 172 Skyhawk (Cambridge)</option>
+                  <option value="viper_fighter">F-16 Falcon (High-Speed Ingress)</option>
                 </select>
                 <p className="text-[10px] text-slate-500 leading-relaxed font-mono">
-                  Ground truth: Salisbury Station lat 51.1245°N, lon -1.8250°W (matches Typhoon profile).
+                  Evaluating all flights in the region will rank the aircraft that matches the audio Doppler curve.
                 </p>
               </div>
             )}
 
+            {/* adsb.lol Query */}
             {sourceType === 'adsblol' && (
               <div className="space-y-2">
                 <button
@@ -739,20 +880,23 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
                   className="w-full bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold py-2 rounded-lg text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
                 >
                   <Globe className="w-3.5 h-3.5" />
-                  <span>{isLoadingAdsb ? 'Querying adsb.lol...' : 'Query adsb.lol for Area Flights'}</span>
+                  <span>{isLoadingAdsb ? 'Scanning adsb.lol...' : 'Fetch All Area Flights from adsb.lol'}</span>
                 </button>
                 {adsbStatusMsg && (
-                  <p className="text-[10px] text-cyan-400 font-mono leading-relaxed">{adsbStatusMsg}</p>
+                  <p className="text-[10px] text-cyan-400 font-mono leading-relaxed bg-slate-950/80 p-2 rounded border border-slate-800">
+                    {adsbStatusMsg}
+                  </p>
                 )}
               </div>
             )}
 
+            {/* Custom File Upload */}
             {sourceType === 'upload' && (
               <div className="space-y-2">
                 <label className="border border-dashed border-slate-700 hover:border-cyan-400 bg-slate-950/70 p-3 rounded-xl flex flex-col items-center justify-center cursor-pointer transition">
                   <Upload className="w-5 h-5 text-cyan-400 mb-1" />
-                  <span className="text-xs font-semibold text-slate-200">Upload ADS-B Trajectory</span>
-                  <span className="text-[10px] text-slate-500 font-mono">JSON (dump1090) or CSV</span>
+                  <span className="text-xs font-semibold text-slate-200">Upload Regional ADS-B Data</span>
+                  <span className="text-[10px] text-slate-500 font-mono">JSON (dump1090) or CSV (multiple flights)</span>
                   <input
                     type="file"
                     accept=".json,.csv,.txt,.sbs1"
@@ -762,22 +906,6 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
                 </label>
               </div>
             )}
-
-            {/* Selected Trajectory Summary */}
-            <div className="bg-slate-950/80 p-2.5 rounded-lg border border-slate-800 text-[11px] font-mono space-y-1">
-              <div className="flex justify-between">
-                <span className="text-slate-400">Callsign:</span>
-                <span className="text-cyan-400 font-bold">{selectedTrajectory.callsign}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">ICAO Hex:</span>
-                <span className="text-slate-200">{selectedTrajectory.hex}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Waypoints:</span>
-                <span className="text-slate-200">{selectedTrajectory.waypoints.length} points</span>
-              </div>
-            </div>
           </div>
 
           {/* Section 3: Date & Time Window */}
@@ -836,7 +964,7 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
               <div className="flex justify-between text-[11px] mb-1">
                 <span className="text-slate-400">Grid Resolution</span>
                 <span className="font-mono text-cyan-400">
-                  {settings.gridResolution}×{settings.gridResolution} ({settings.gridResolution * settings.gridResolution} pts)
+                  {settings.gridResolution}×{settings.gridResolution} ({settings.gridResolution * settings.gridResolution} pts/plane)
                 </span>
               </div>
               <div className="grid grid-cols-4 gap-1 text-[10px] font-mono">
@@ -896,7 +1024,11 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
             className="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold py-3 rounded-xl text-xs flex items-center justify-center gap-2 transition duration-150 shadow-lg shadow-emerald-500/20 cursor-pointer disabled:opacity-50 mt-auto"
           >
             <Zap className={`w-4 h-4 fill-current ${isCalculating ? 'animate-spin' : ''}`} />
-            <span>{isCalculating ? 'Calculating Spatial Inversion...' : 'Calculate Geolocation Heatmap'}</span>
+            <span>
+              {isCalculating
+                ? `Evaluating ${trajectories.length} Flights in Region...`
+                : `Correlate All ${trajectories.length} Area Flights`}
+            </span>
           </button>
         </aside>
       </div>

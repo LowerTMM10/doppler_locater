@@ -4,8 +4,10 @@ import {
   ColstoSettings,
   DopplerPoint,
   FittedParams,
+  FlightMatchResult,
   FlightTrajectory,
   FlightWaypoint,
+  MultiFlightSearchResult,
   SearchArea,
 } from '../types';
 
@@ -363,3 +365,88 @@ export async function runColstoGeolocationSearch(
     theoreticalCurve,
   };
 }
+
+/**
+ * Searches ALL flights in the region against the measured Doppler curve
+ * Correlates each flight and ranks them by likelihood
+ */
+export async function runColstoMultiFlightSearch(
+  trajectories: FlightTrajectory[],
+  fittedParams: FittedParams,
+  searchArea: SearchArea,
+  settings: ColstoSettings
+): Promise<MultiFlightSearchResult> {
+  const overallStart = performance.now();
+  const validTrajectories = trajectories.filter((t) => t.waypoints.length >= 2);
+
+  if (validTrajectories.length === 0) {
+    throw new Error('No valid flight trajectories to evaluate in this region.');
+  }
+
+  const cols = settings.gridResolution;
+  const rows = settings.gridResolution;
+  const totalCells = cols * rows;
+  const compositeScores = new Float32Array(totalCells);
+
+  const matches: FlightMatchResult[] = [];
+  let totalEvaluations = 0;
+  let engineUsed: 'wasm' | 'vector_js' = 'vector_js';
+
+  for (const traj of validTrajectories) {
+    const res = await runColstoGeolocationSearch(traj, fittedParams, searchArea, settings);
+    totalEvaluations += res.evaluationsCount;
+    engineUsed = res.engineUsed;
+
+    // Average speed of this flight
+    const speeds = traj.waypoints.map((w) => w.groundSpeed);
+    const avgSpeed = speeds.reduce((a, b) => a + b, 0) / Math.max(1, speeds.length);
+    const speedDiff = Math.abs(avgSpeed - fittedParams.v);
+
+    // Speed consistency penalty: aircraft speed should be close to fitted Doppler speed
+    // e.g. within 35 m/s (~126 km/h)
+    const speedFactor = Math.exp(-0.5 * Math.pow(speedDiff / 35, 2));
+    const rawScore = res.topLocation.score;
+    const matchScore = Math.max(0, Math.min(100, rawScore * speedFactor * 100));
+
+    // Combine into composite heatmap (max pooling across candidate flights)
+    for (let i = 0; i < totalCells; i++) {
+      if (res.gridScores[i] > compositeScores[i]) {
+        compositeScores[i] = res.gridScores[i];
+      }
+    }
+
+    matches.push({
+      trajectory: traj,
+      rank: 0,
+      matchScore,
+      topLocation: res.topLocation,
+      speedDiff,
+      dmin: res.topLocation.dmin,
+      tcpa: res.topLocation.tcpa,
+      searchResult: res,
+    });
+  }
+
+  // Sort descending by matchScore
+  matches.sort((a, b) => b.matchScore - a.matchScore);
+  matches.forEach((m, idx) => {
+    m.rank = idx + 1;
+  });
+
+  const bestMatch = matches.length > 0 ? matches[0] : null;
+  const executionTimeMs = performance.now() - overallStart;
+
+  return {
+    matches,
+    bestMatch,
+    compositeScores,
+    cols,
+    rows,
+    searchArea,
+    totalFlightsEvaluated: validTrajectories.length,
+    executionTimeMs,
+    evaluationsCount: totalEvaluations,
+    engineUsed,
+  };
+}
+

@@ -113,3 +113,28 @@ export interface ColstoSettings {
   sigmaTime: number; // time tolerance in seconds (e.g. 1.0s)
 }
 
+export interface FlightMatchResult {
+  trajectory: FlightTrajectory;
+  rank: number;
+  matchScore: number; // 0..100%
+  topLocation: ColstoCandidate;
+  speedDiff: number; // |flight_v - target_v| in m/s
+  dmin: number;
+  tcpa: number;
+  searchResult: ColstoSearchResult;
+}
+
+export interface MultiFlightSearchResult {
+  matches: FlightMatchResult[];
+  bestMatch: FlightMatchResult | null;
+  compositeScores: Float32Array;
+  cols: number;
+  rows: number;
+  searchArea: SearchArea;
+  totalFlightsEvaluated: number;
+  executionTimeMs: number;
+  evaluationsCount: number;
+  engineUsed: 'wasm' | 'vector_js';
+}
+
+

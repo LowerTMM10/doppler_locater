@@ -9,6 +9,12 @@
   force = true
 
 [[redirects]]
+  from = "/api/adsb/*"
+  to = "https://api.adsb.lol/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/doppler_detector/*"
   to = "/index.html"
   status = 200

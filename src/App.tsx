@@ -24,7 +24,7 @@ import {
 } from './dsp/fitting';
 
 export const App: React.FC = () => {
-  const [currentView, setCurrentView] = useState<'aerodoppler' | 'colsto' | 'home'>('aerodoppler');
+  const [currentView, setCurrentView] = useState<'aerodoppler' | 'colsto' | 'home'>('home');
 
   // Audio Context & Buffer
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -573,6 +573,7 @@ export const App: React.FC = () => {
   if (currentView === 'colsto') {
     return (
       <ColstoHeatmapFinder
+        onBackToDirectory={() => setCurrentView('home')}
         onBackToSpectrogram={() => setCurrentView('aerodoppler')}
         fittedParams={fittedParams}
         recordedPoints={plottedPoints}
