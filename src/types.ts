@@ -78,7 +78,7 @@ export interface SearchArea {
   maxLon: number;
 }
 
-export interface ColstoCandidate {
+export interface GeoCandidate {
   lat: number;
   lon: number;
   score: number;
@@ -86,42 +86,45 @@ export interface ColstoCandidate {
   tcpa: number;
   distToTrack: number;
 }
+export type ColstoCandidate = GeoCandidate;
 
-export interface ColstoSearchResult {
+export interface GeoSearchResult {
   gridScores: Float32Array; // row-major flat array of scores [0..1]
   gridDmin: Float32Array;
   gridTcpa: Float32Array;
   cols: number;
   rows: number;
   searchArea: SearchArea;
-  topLocation: ColstoCandidate;
-  topCandidates: ColstoCandidate[];
+  topLocation: GeoCandidate;
+  topCandidates: GeoCandidate[];
   executionTimeMs: number;
   evaluationsCount: number;
   engineUsed: 'wasm' | 'vector_js';
   theoreticalCurve: DopplerPoint[];
 }
+export type ColstoSearchResult = GeoSearchResult;
 
-export interface ColstoSettings {
+export interface GeoSettings {
   useWasm: boolean;
   gridResolution: number; // 40, 80, 160, 300
   searchRadiusKm: number; // 10, 25, 50, 100
-  spatialPruning: boolean; // Colsto cylinder pruning
+  spatialPruning: boolean; // Cylindrical spatial envelope pruning
   elevationModel: boolean;
   soundSpeed: number; // 343 m/s
   sigmaDist: number; // distance tolerance in meters (e.g. 50m)
   sigmaTime: number; // time tolerance in seconds (e.g. 1.0s)
 }
+export type ColstoSettings = GeoSettings;
 
 export interface FlightMatchResult {
   trajectory: FlightTrajectory;
   rank: number;
   matchScore: number; // 0..100%
-  topLocation: ColstoCandidate;
+  topLocation: GeoCandidate;
   speedDiff: number; // |flight_v - target_v| in m/s
   dmin: number;
   tcpa: number;
-  searchResult: ColstoSearchResult;
+  searchResult: GeoSearchResult;
 }
 
 export interface MultiFlightSearchResult {

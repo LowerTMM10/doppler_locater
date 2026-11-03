@@ -4,7 +4,7 @@ Aircraft Audio Doppler Spectrum Extractor, Flight Path Analyzer & Signal DSP Too
 
 Rewritten from the original LowerTMM10 Doppler detector into a high-performance **React + TypeScript + Vite + Tailwind CSS** application.
 
-## Core Features Ported
+## Core Features
 
 1. **High-Speed STFT Spectrogram & Audio DSP**:
    - Configurable FFT window sizes from 512 up to 32,768 bins.
@@ -33,21 +33,26 @@ Rewritten from the original LowerTMM10 Doppler detector into a high-performance 
      - Time of Closest Point of Approach ($t_0$ in seconds)
    - Automatic ridge detection and curve fitting with confidence scoring.
 
-5. **Colsto Geolocation Heatmap Finder (WASM Accelerated)**:
+5. **Doppler Geolocation Heatmap Finder (WASM Accelerated)**:
+   - **Multi-Flight Airspace Correlation**: Searches and correlates *all* aircraft trajectories in the selected region during the specified time frame, ranks them on a leaderboard by acoustic fit score and speed consistency, and identifies the best-match aircraft and observer location.
+   - **Interactive Region Selector**:
+     - Draw/drag rectangular search bounding box directly on the Leaflet map with real-time km dimensions.
+     - "Fit to Flights" and "Fit to View" one-click bounds buttons.
+     - Precision manual North/South/East/West coordinate bounds inputs.
    - **Inverse Doppler Acoustic Geolocation**: Inverts candidate ground observer locations against 3D aircraft trajectories using acoustic propagation delay ($t_{\text{obs}} = t_{\text{emit}} + d/c$) and line-of-sight Doppler projection.
-   - **Optimizations based on Colsto's OSINT Research**:
+   - **High-Performance Optimization**:
      - **Cylindrical Distance Bound (Spatial Pruning)**: Skips non-physical candidate points outside the $d_{\text{min}}$ cylinder envelope for up to 15x speedup.
      - **Local Cartesian Tangent Plane Projection**: Fast equirectangular metric projection eliminating trigonometric overhead in the inner loop.
-     - **Rust + WebAssembly (WASM) Engine**: High-throughput inner loop evaluating up to 10M grid candidate points per second (`src/wasm/colsto_engine.rs` and `src/wasm/wasmEngine.ts`).
+     - **Rust + WebAssembly (WASM) Engine**: High-throughput inner loop evaluating up to 10M grid candidate points per second (`src/wasm/doppler_engine.rs` and `src/wasm/wasmEngine.ts`).
    - **Flexible Flight Data Ingestion**:
-     - **adsb.lol API**: Live transponder query for flights within area radius.
+     - **adsb.lol API**: Live transponder query for flights within area radius (proxied via Vite dev server and Netlify to prevent CORS issues).
      - **Custom Uploads**: Supports dump1090 JSON, readsb traces, and CSV formats.
      - **Benchmark Corridor Test Flights**: Instant verification test cases (Typhoon Fast Jet, B738 Heathrow approach, C172 Skyhawk).
    - **Configurable Grid Densities**: 40×40 (1,600 pts), 80×80 (6,400 pts), 160×160 (25,600 pts), and 300×300 (90,000 pts).
-   - **Interactive Leaflet Map**: OpenStreetMap tile maps (OSM Dark, OSM Standard, and World Satellite Imagery), search area bounding box, glowing 3D flight trajectory waypoints, thermal likelihood heatmap, and top candidate reticle pin with one-click coordinate copy.
+   - **Zero-Limit OpenStreetMap**: Official OpenStreetMap tiles (OSM Dark Night mode, OSM Standard, and World Satellite Imagery), glowing 3D flight trajectory waypoints, thermal likelihood heatmap, and top candidate reticle pin with one-click coordinate copy.
 
 6. **Tool Directory & Data Export**:
-   - Integrated tools catalog with real-time search.
+   - Integrated tools catalog default landing page with real-time search.
    - CSV export of mapped points and fitted parameters for ADS-B correlation.
 
 ## Development

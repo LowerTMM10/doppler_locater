@@ -3,7 +3,8 @@ import { Plane, FileAudio, Mic, Download, Sparkles, ArrowLeft } from 'lucide-rea
 
 interface HeaderProps {
   onBackToDirectory: () => void;
-  onOpenColstoFinder: () => void;
+  onOpenLocator?: () => void;
+  onOpenColstoFinder?: () => void;
   onFileUpload: (file: File) => void;
   onGenerateDemo: () => void;
   onToggleMic: () => void;
@@ -15,6 +16,7 @@ interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({
   onBackToDirectory,
+  onOpenLocator,
   onOpenColstoFinder,
   onFileUpload,
   onGenerateDemo,
@@ -101,14 +103,14 @@ export const Header: React.FC<HeaderProps> = ({
           <span>{isMicActive ? 'Stop Mic' : 'Live Mic'}</span>
         </button>
 
-        {/* Colsto Geolocation Heatmap Finder */}
+        {/* Doppler Geolocation Heatmap Finder */}
         <button
-          onClick={onOpenColstoFinder}
-          title="Open Colsto Doppler Geolocation Heatmap Finder (WASM)"
+          onClick={onOpenLocator || onOpenColstoFinder}
+          title="Open Doppler Flight Geolocation Heatmap (WASM)"
           className="bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/40 font-semibold px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 transition duration-150 cursor-pointer shadow-lg shadow-emerald-500/10"
         >
           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-          <span>Colsto Heatmap</span>
+          <span>Flight Locator</span>
         </button>
 
         {/* Export CSV */}

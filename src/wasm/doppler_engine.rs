@@ -1,4 +1,4 @@
-//! Colsto Doppler Geolocation Optimizer in Rust
+//! Doppler Acoustic Geolocation Optimizer in Rust
 //! High-performance aircraft flight path matching and acoustic heatmap generation.
 //! Designed to run in WebAssembly for maximum throughput (~10M grid evaluations/sec).
 
@@ -19,11 +19,11 @@ pub struct EvaluationParams {
     pub sigma_dist: f32,     // Distance Gaussian width (m)
     pub sigma_time: f32,     // Time Gaussian width (s)
     pub sound_speed: f32,    // Speed of sound (m/s, default 343.0)
-    pub spatial_pruning: i32,// 1 = enable Colsto cylinder bounding optimization
+    pub spatial_pruning: i32,// 1 = enable cylindrical envelope bounding optimization
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn colsto_evaluate_grid(
+pub unsafe extern "C" fn doppler_evaluate_grid(
     traj_ptr: *const TrajectoryPoint,
     traj_len: usize,
     params: *const EvaluationParams,
@@ -78,7 +78,7 @@ pub unsafe extern "C" fn colsto_evaluate_grid(
                 }
             }
 
-            // Colsto Cylindrical Pruning:
+            // Cylindrical Envelope Pruning:
             // If closest point is outside the Doppler radius cylinder by a wide margin,
             // we can immediately zero the cell.
             if p.spatial_pruning != 0 && min_dist_sq > prune_max_r_sq {

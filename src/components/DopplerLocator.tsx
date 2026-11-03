@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import L from 'leaflet';
 import {
-  ColstoCandidate,
-  ColstoSearchResult,
-  ColstoSettings,
   DopplerPoint,
   FittedParams,
   FlightMatchResult,
   FlightTrajectory,
+  GeoCandidate,
+  GeoSearchResult,
+  GeoSettings,
   MultiFlightSearchResult,
   SearchArea,
 } from '../types';
@@ -16,7 +16,7 @@ import {
   fetchAdsbLol,
   parseCustomAdsbFiles,
 } from '../services/adsbService';
-import { runColstoGeolocationSearch, runColstoMultiFlightSearch } from '../wasm/wasmEngine';
+import { runDopplerGeolocationSearch, runMultiFlightGeolocationSearch } from '../wasm/wasmEngine';
 import {
   Zap,
   MapPin,
@@ -34,16 +34,19 @@ import {
   TrendingUp,
   Activity,
   Wrench,
+  Crop,
+  Maximize2,
+  Crosshair,
 } from 'lucide-react';
 
-interface ColstoHeatmapFinderProps {
+interface DopplerLocatorProps {
   onBackToDirectory?: () => void;
   onBackToSpectrogram: () => void;
   fittedParams: FittedParams | null;
   recordedPoints: DopplerPoint[];
 }
 
-export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
+export const DopplerLocator: React.FC<DopplerLocatorProps> = ({
   onBackToDirectory,
   onBackToSpectrogram,
   fittedParams,
@@ -80,8 +83,13 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
     maxLon: -1.6500,
   }));
 
+  // Region Selection Mode
+  const [isDrawingRegion, setIsDrawingRegion] = useState(false);
+  const drawStartRef = useRef<L.LatLng | null>(null);
+  const tempDrawRectRef = useRef<L.Rectangle | null>(null);
+
   // Settings & Optimization
-  const [settings, setSettings] = useState<ColstoSettings>({
+  const [settings, setSettings] = useState<GeoSettings>({
     useWasm: true,
     gridResolution: 80, // 80x80 = 6,400 points
     searchRadiusKm: 25,
@@ -172,6 +180,81 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
     baseTileLayerRef.current = layer;
   }, [mapStyle]);
 
+  // Interactive Region Selection on Map (Drag to Draw Box)
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    if (isDrawingRegion) {
+      map.dragging.disable();
+      const container = map.getContainer();
+      container.style.cursor = 'crosshair';
+
+      const handleMouseDown = (e: L.LeafletMouseEvent) => {
+        drawStartRef.current = e.latlng;
+        if (tempDrawRectRef.current) {
+          map.removeLayer(tempDrawRectRef.current);
+        }
+        tempDrawRectRef.current = L.rectangle(L.latLngBounds(e.latlng, e.latlng), {
+          color: '#00f2fe',
+          weight: 2,
+          dashArray: '4, 4',
+          fillColor: '#00f2fe',
+          fillOpacity: 0.15,
+        }).addTo(map);
+      };
+
+      const handleMouseMove = (e: L.LeafletMouseEvent) => {
+        if (!drawStartRef.current || !tempDrawRectRef.current) return;
+        tempDrawRectRef.current.setBounds(L.latLngBounds(drawStartRef.current, e.latlng));
+      };
+
+      const handleMouseUp = (e: L.LeafletMouseEvent) => {
+        if (!drawStartRef.current) return;
+        const start = drawStartRef.current;
+        const end = e.latlng;
+        drawStartRef.current = null;
+
+        if (tempDrawRectRef.current) {
+          map.removeLayer(tempDrawRectRef.current);
+          tempDrawRectRef.current = null;
+        }
+
+        const minLat = Math.min(start.lat, end.lat);
+        const maxLat = Math.max(start.lat, end.lat);
+        const minLon = Math.min(start.lng, end.lng);
+        const maxLon = Math.max(start.lng, end.lng);
+
+        // If dragged more than a tiny click, set region
+        if (Math.abs(maxLat - minLat) > 0.005 && Math.abs(maxLon - minLon) > 0.005) {
+          setSearchArea({ minLat, maxLat, minLon, maxLon });
+          setIsDrawingRegion(false);
+          map.dragging.enable();
+          container.style.cursor = '';
+        }
+      };
+
+      map.on('mousedown', handleMouseDown);
+      map.on('mousemove', handleMouseMove);
+      map.on('mouseup', handleMouseUp);
+
+      return () => {
+        map.dragging.enable();
+        container.style.cursor = '';
+        map.off('mousedown', handleMouseDown);
+        map.off('mousemove', handleMouseMove);
+        map.off('mouseup', handleMouseUp);
+        if (tempDrawRectRef.current) {
+          map.removeLayer(tempDrawRectRef.current);
+          tempDrawRectRef.current = null;
+        }
+      };
+    } else {
+      map.dragging.enable();
+      map.getContainer().style.cursor = '';
+    }
+  }, [isDrawingRegion]);
+
   // Render ALL Flight Paths on the Map (Selected in Cyan, Others in subtle lines)
   useEffect(() => {
     const map = mapInstanceRef.current;
@@ -180,14 +263,10 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
 
     flightGroup.clearLayers();
 
-    const allBounds = L.latLngBounds([]);
-
     trajectories.forEach((traj) => {
       const isSelected = selectedTrajectory && traj.id === selectedTrajectory.id;
       const latlngs: [number, number][] = traj.waypoints.map((wp) => [wp.lat, wp.lon]);
       if (latlngs.length < 2) return;
-
-      latlngs.forEach((ll) => allBounds.extend(ll));
 
       // Draw flight line
       const polyline = L.polyline(latlngs, {
@@ -232,23 +311,6 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
         });
       }
     });
-
-    // Adjust search bounds if valid
-    if (allBounds.isValid()) {
-      const latSpan = Math.max(0.08, allBounds.getNorth() - allBounds.getSouth());
-      const lonSpan = Math.max(0.08, allBounds.getEast() - allBounds.getWest());
-
-      setSearchArea({
-        minLat: allBounds.getSouth() - latSpan * 0.35,
-        maxLat: allBounds.getNorth() + latSpan * 0.35,
-        minLon: allBounds.getWest() - lonSpan * 0.35,
-        maxLon: allBounds.getEast() + lonSpan * 0.35,
-      });
-
-      if (!multiResult) {
-        map.fitBounds(allBounds, { padding: [40, 40] });
-      }
-    }
   }, [trajectories, selectedTrajectory]);
 
   // Update Search Area Rectangle on Map
@@ -270,11 +332,46 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
       weight: 1.5,
       dashArray: '5, 5',
       fillColor: '#38bdf8',
-      fillOpacity: 0.03,
+      fillOpacity: 0.04,
     }).addTo(map);
 
     searchBoundsLayerRef.current = rect;
   }, [searchArea]);
+
+  // Fit Region to Currently Visible Viewport
+  const handleFitRegionToViewport = () => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    const b = map.getBounds();
+    setSearchArea({
+      minLat: b.getSouth(),
+      maxLat: b.getNorth(),
+      minLon: b.getWest(),
+      maxLon: b.getEast(),
+    });
+  };
+
+  // Fit Region Around Loaded Flights
+  const handleFitRegionToFlights = () => {
+    const bounds = L.latLngBounds([]);
+    trajectories.forEach((t) => {
+      t.waypoints.forEach((wp) => bounds.extend([wp.lat, wp.lon]));
+    });
+
+    if (bounds.isValid()) {
+      const latSpan = Math.max(0.08, bounds.getNorth() - bounds.getSouth());
+      const lonSpan = Math.max(0.08, bounds.getEast() - bounds.getWest());
+
+      setSearchArea({
+        minLat: bounds.getSouth() - latSpan * 0.35,
+        maxLat: bounds.getNorth() + latSpan * 0.35,
+        minLon: bounds.getWest() - lonSpan * 0.35,
+        maxLon: bounds.getEast() + lonSpan * 0.35,
+      });
+
+      mapInstanceRef.current?.fitBounds(bounds, { padding: [40, 40] });
+    }
+  };
 
   // Render Heatmap overlay onto Leaflet map (Selected flight or Composite)
   useEffect(() => {
@@ -406,7 +503,7 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
     }
   }, [multiResult, activeFlightMatch, heatmapMode]);
 
-  // Execute Colsto Geolocation Search Across ALL Flights in the Region
+  // Execute Search Across ALL Flights in the Region
   const handleRunSearch = async () => {
     setIsCalculating(true);
     setCopiedCoords(false);
@@ -414,7 +511,7 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
     try {
       await new Promise((r) => setTimeout(r, 40));
 
-      const res = await runColstoMultiFlightSearch(
+      const res = await runMultiFlightGeolocationSearch(
         trajectories,
         targetParams,
         searchArea,
@@ -442,19 +539,22 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
     }
   };
 
-  // Fetch from adsb.lol API (with Proxy and CORS fallback)
-  const handleFetchAdsbLol = async () => {
+  // Fetch from adsb.lol API for the Selected Region
+  const handleFetchAdsbLolForRegion = async () => {
     setIsLoadingAdsb(true);
-    setAdsbStatusMsg('Scanning airspace via adsb.lol...');
+    setAdsbStatusMsg('Scanning selected region airspace via adsb.lol...');
 
     try {
       const centerLat = (searchArea.minLat + searchArea.maxLat) / 2;
       const centerLon = (searchArea.minLon + searchArea.maxLon) / 2;
-      const { trajectories: list, sourceNotice } = await fetchAdsbLol(
-        centerLat,
-        centerLon,
-        settings.searchRadiusKm * 0.539957
-      );
+
+      // Calculate approximate radius covering the search box in NM
+      const latDiffKm = Math.abs(searchArea.maxLat - searchArea.minLat) * 111;
+      const lonDiffKm = Math.abs(searchArea.maxLon - searchArea.minLon) * 111 * Math.cos((centerLat * Math.PI) / 180);
+      const radiusKm = Math.max(10, Math.hypot(latDiffKm, lonDiffKm) / 2);
+      const radiusNm = radiusKm * 0.539957;
+
+      const { trajectories: list, sourceNotice } = await fetchAdsbLol(centerLat, centerLon, radiusNm);
 
       if (list.length > 0) {
         setTrajectories(list);
@@ -462,7 +562,7 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
         setAdsbStatusMsg(sourceNotice);
       }
     } catch (err) {
-      setAdsbStatusMsg(`adsb.lol query failed: ${(err as Error).message}. Try uploading custom flight data.`);
+      setAdsbStatusMsg(`adsb.lol query failed: ${(err as Error).message}`);
     } finally {
       setIsLoadingAdsb(false);
     }
@@ -514,6 +614,10 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
     setTimeout(() => setCopiedCoords(false), 2000);
   };
 
+  // Search Area Dimension Stats
+  const areaWidthKm = Math.abs(searchArea.maxLon - searchArea.minLon) * 111 * Math.cos((((searchArea.minLat + searchArea.maxLat) / 2) * Math.PI) / 180);
+  const areaHeightKm = Math.abs(searchArea.maxLat - searchArea.minLat) * 111;
+
   return (
     <div className="h-screen w-screen flex flex-col font-sans overflow-hidden bg-darkbg text-slate-200">
       {/* Top Header */}
@@ -541,13 +645,13 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
 
           <div>
             <h1 className="text-base sm:text-lg font-bold tracking-wide text-slate-100 flex items-center gap-2">
-              Colsto Geolocation Heatmap{' '}
+              Doppler Flight Locator{' '}
               <span className="text-[10px] sm:text-xs px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 font-mono border border-rose-500/30">
-                MULTI-FLIGHT WASM
+                WASM ACCELERATED
               </span>
             </h1>
             <p className="text-[11px] sm:text-xs text-slate-400">
-              Regional Airspace Doppler Correlation &amp; Ground Observer Heatmap Inversion
+              Regional Airspace Acoustic Inversion &amp; Ground Observer Heatmap Finder
             </p>
           </div>
         </div>
@@ -571,8 +675,8 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
             <Zap className={`w-3.5 h-3.5 fill-current ${isCalculating ? 'animate-spin' : ''}`} />
             <span>
               {isCalculating
-                ? `Correlating ${trajectories.length} Flights...`
-                : `Correlate All ${trajectories.length} Area Flights`}
+                ? `Searching ${trajectories.length} Flights...`
+                : `Correlate All ${trajectories.length} Region Flights`}
             </span>
           </button>
         </div>
@@ -583,6 +687,48 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
         {/* Left: Map Visualization Area */}
         <div className="flex-1 relative flex flex-col overflow-hidden bg-slate-950">
           <div ref={mapContainerRef} className="flex-1 w-full h-full relative z-10" />
+
+          {/* Interactive Region Selection Floating Toolbar */}
+          <div className="absolute top-4 left-4 z-20 flex items-center gap-2 pointer-events-auto flex-wrap">
+            <button
+              onClick={() => setIsDrawingRegion((prev) => !prev)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-mono font-semibold flex items-center gap-1.5 border shadow-xl transition cursor-pointer ${
+                isDrawingRegion
+                  ? 'bg-rose-600 border-rose-400 text-white animate-pulse'
+                  : 'bg-slate-900/90 hover:bg-slate-800 border-cyan-500/40 text-cyan-300 backdrop-blur-md'
+              }`}
+              title="Click and drag on map to draw a new region bounding box"
+            >
+              <Crop className="w-3.5 h-3.5" />
+              <span>{isDrawingRegion ? 'Drawing... Drag on Map' : 'Select Region Box'}</span>
+            </button>
+
+            <button
+              onClick={handleFitRegionToFlights}
+              className="bg-slate-900/90 hover:bg-slate-800 border border-slate-700 text-slate-200 px-2.5 py-1.5 rounded-lg text-xs font-mono flex items-center gap-1.5 transition shadow-xl backdrop-blur-md cursor-pointer"
+              title="Fit search area around all loaded flights"
+            >
+              <Maximize2 className="w-3.5 h-3.5 text-cyan-400" />
+              <span className="hidden sm:inline">Fit Flights</span>
+            </button>
+
+            <button
+              onClick={handleFitRegionToViewport}
+              className="bg-slate-900/90 hover:bg-slate-800 border border-slate-700 text-slate-200 px-2.5 py-1.5 rounded-lg text-xs font-mono flex items-center gap-1.5 transition shadow-xl backdrop-blur-md cursor-pointer"
+              title="Fit search area to currently visible map screen"
+            >
+              <Crosshair className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="hidden sm:inline">Current View</span>
+            </button>
+
+            {/* Region Dimensions Badge */}
+            <div className="bg-slate-900/90 backdrop-blur-md border border-slate-800 px-3 py-1.5 rounded-lg text-[11px] font-mono text-slate-300 shadow-xl hidden md:flex items-center gap-2">
+              <span className="text-slate-500">REGION:</span>
+              <span className="text-cyan-400 font-bold">
+                {areaWidthKm.toFixed(1)} km × {areaHeightKm.toFixed(1)} km
+              </span>
+            </div>
+          </div>
 
           {/* Map Layer Switcher (OpenStreetMap & Satellite) */}
           <div className="absolute top-4 right-4 z-20 bg-slate-900/90 backdrop-blur-md border border-slate-800 p-1 rounded-lg flex items-center gap-1 text-[11px] font-mono shadow-xl pointer-events-auto">
@@ -621,9 +767,9 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
             </button>
           </div>
 
-          {/* Floating Flight Correlation Leaderboard Badge */}
+          {/* Floating Regional Flight Correlation Leaderboard */}
           {multiResult && (
-            <div className="absolute top-4 left-4 z-20 bg-slate-900/95 backdrop-blur-md border border-slate-800 rounded-xl p-3.5 shadow-2xl w-80 text-xs font-mono space-y-2 pointer-events-auto max-h-[85vh] flex flex-col">
+            <div className="absolute top-16 left-4 z-20 bg-slate-900/95 backdrop-blur-md border border-slate-800 rounded-xl p-3.5 shadow-2xl w-80 text-xs font-mono space-y-2 pointer-events-auto max-h-[75vh] flex flex-col">
               <div className="flex items-center justify-between pb-1.5 border-b border-slate-800 shrink-0">
                 <span className="text-emerald-400 font-bold flex items-center gap-1.5">
                   <TrendingUp className="w-3.5 h-3.5" /> Regional Flight Matches ({multiResult.matches.length})
@@ -757,7 +903,103 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
 
         {/* Right: Controls & Parameters Sidebar */}
         <aside className="w-96 bg-panelbg border-l border-slate-800 p-4 flex flex-col space-y-4 overflow-y-auto shrink-0 text-xs select-none">
-          {/* Section 1: Target Doppler Curve Parameters */}
+          {/* Section 1: Selected Search Region Controls */}
+          <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-3.5 space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-slate-300 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                <Crop className="w-3.5 h-3.5 text-cyan-400" /> Selected Search Region
+              </h3>
+              <span className="text-[10px] text-cyan-400 font-mono">
+                {areaWidthKm.toFixed(0)}×{areaHeightKm.toFixed(0)} km
+              </span>
+            </div>
+
+            {/* Quick action buttons for region selection */}
+            <div className="grid grid-cols-2 gap-1.5 text-[11px] font-mono">
+              <button
+                onClick={() => setIsDrawingRegion((prev) => !prev)}
+                className={`py-1.5 px-2 rounded-lg border flex items-center justify-center gap-1 transition ${
+                  isDrawingRegion
+                    ? 'bg-rose-500/25 border-rose-500 text-rose-300 font-bold'
+                    : 'bg-slate-950 border-slate-800 text-cyan-300 hover:border-cyan-500/50'
+                }`}
+              >
+                <Crop className="w-3 h-3" />
+                <span>{isDrawingRegion ? 'Stop Drawing' : 'Draw Box on Map'}</span>
+              </button>
+              <button
+                onClick={handleFitRegionToFlights}
+                className="bg-slate-950 border border-slate-800 hover:border-slate-700 text-slate-300 py-1.5 px-2 rounded-lg flex items-center justify-center gap-1 transition"
+              >
+                <Maximize2 className="w-3 h-3 text-emerald-400" />
+                <span>Fit to Flights</span>
+              </button>
+            </div>
+
+            {/* Manual Lat/Lon Bounds Editor */}
+            <div className="space-y-1.5 bg-slate-950/80 p-2.5 rounded-lg border border-slate-800 text-[11px] font-mono">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-slate-400">North Lat:</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={searchArea.maxLat.toFixed(4)}
+                  onChange={(e) =>
+                    setSearchArea((prev) => ({ ...prev, maxLat: parseFloat(e.target.value) || prev.maxLat }))
+                  }
+                  className="w-24 bg-slate-900 border border-slate-700 px-1.5 py-0.5 rounded text-right text-slate-200"
+                />
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-slate-400">South Lat:</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={searchArea.minLat.toFixed(4)}
+                  onChange={(e) =>
+                    setSearchArea((prev) => ({ ...prev, minLat: parseFloat(e.target.value) || prev.minLat }))
+                  }
+                  className="w-24 bg-slate-900 border border-slate-700 px-1.5 py-0.5 rounded text-right text-slate-200"
+                />
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-slate-400">West Lon:</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={searchArea.minLon.toFixed(4)}
+                  onChange={(e) =>
+                    setSearchArea((prev) => ({ ...prev, minLon: parseFloat(e.target.value) || prev.minLon }))
+                  }
+                  className="w-24 bg-slate-900 border border-slate-700 px-1.5 py-0.5 rounded text-right text-slate-200"
+                />
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-slate-400">East Lon:</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={searchArea.maxLon.toFixed(4)}
+                  onChange={(e) =>
+                    setSearchArea((prev) => ({ ...prev, maxLon: parseFloat(e.target.value) || prev.maxLon }))
+                  }
+                  className="w-24 bg-slate-900 border border-slate-700 px-1.5 py-0.5 rounded text-right text-slate-200"
+                />
+              </div>
+            </div>
+
+            {/* Fetch Flights in this Selected Region */}
+            <button
+              onClick={handleFetchAdsbLolForRegion}
+              disabled={isLoadingAdsb}
+              className="w-full bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold py-2 rounded-lg text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+            >
+              <Globe className="w-3.5 h-3.5" />
+              <span>{isLoadingAdsb ? 'Scanning Airspace...' : 'Scan Flights in Selected Region'}</span>
+            </button>
+          </div>
+
+          {/* Section 2: Target Doppler Curve Parameters */}
           <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-3.5 space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="font-semibold text-slate-300 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
@@ -793,7 +1035,6 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
               </div>
             </div>
 
-            {/* Slider to adjust distance if desired */}
             <div>
               <div className="flex justify-between text-[11px] mb-1">
                 <span className="text-slate-400">Target Distance (d_min)</span>
@@ -813,7 +1054,7 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
             </div>
           </div>
 
-          {/* Section 2: Regional Flight Data Ingestion */}
+          {/* Section 3: Regional Flight Data Ingestion */}
           <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-3.5 space-y-3">
             <h3 className="font-semibold text-slate-300 uppercase tracking-wider text-[11px] flex items-center justify-between">
               <span className="flex items-center gap-1.5">
@@ -865,28 +1106,6 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
                   <option value="c172_cambridge">Cessna 172 Skyhawk (Cambridge)</option>
                   <option value="viper_fighter">F-16 Falcon (High-Speed Ingress)</option>
                 </select>
-                <p className="text-[10px] text-slate-500 leading-relaxed font-mono">
-                  Evaluating all flights in the region will rank the aircraft that matches the audio Doppler curve.
-                </p>
-              </div>
-            )}
-
-            {/* adsb.lol Query */}
-            {sourceType === 'adsblol' && (
-              <div className="space-y-2">
-                <button
-                  onClick={handleFetchAdsbLol}
-                  disabled={isLoadingAdsb}
-                  className="w-full bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold py-2 rounded-lg text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
-                >
-                  <Globe className="w-3.5 h-3.5" />
-                  <span>{isLoadingAdsb ? 'Scanning adsb.lol...' : 'Fetch All Area Flights from adsb.lol'}</span>
-                </button>
-                {adsbStatusMsg && (
-                  <p className="text-[10px] text-cyan-400 font-mono leading-relaxed bg-slate-950/80 p-2 rounded border border-slate-800">
-                    {adsbStatusMsg}
-                  </p>
-                )}
               </div>
             )}
 
@@ -906,9 +1125,15 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
                 </label>
               </div>
             )}
+
+            {adsbStatusMsg && (
+              <p className="text-[10px] text-cyan-400 font-mono leading-relaxed bg-slate-950/80 p-2 rounded border border-slate-800">
+                {adsbStatusMsg}
+              </p>
+            )}
           </div>
 
-          {/* Section 3: Date & Time Window */}
+          {/* Section 4: Date & Time Window */}
           <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-3.5 space-y-3">
             <h3 className="font-semibold text-slate-300 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
               <Calendar className="w-3.5 h-3.5 text-amber-400" /> Date &amp; Time Window
@@ -953,16 +1178,15 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
             </div>
           </div>
 
-          {/* Section 4: Grid Density & Performance Optimizer */}
+          {/* Section 5: Grid Density & Performance Optimizer */}
           <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-3.5 space-y-3">
             <h3 className="font-semibold text-slate-300 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
-              <Zap className="w-3.5 h-3.5 text-rose-400" /> Colsto Optimizer &amp; Grid Resolution
+              <Zap className="w-3.5 h-3.5 text-rose-400" /> Spatial Resolution &amp; Acceleration
             </h3>
 
-            {/* Resolution Selector */}
             <div>
               <div className="flex justify-between text-[11px] mb-1">
-                <span className="text-slate-400">Grid Resolution</span>
+                <span className="text-slate-400">Grid Density</span>
                 <span className="font-mono text-cyan-400">
                   {settings.gridResolution}×{settings.gridResolution} ({settings.gridResolution * settings.gridResolution} pts/plane)
                 </span>
@@ -1000,7 +1224,7 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
               </span>
             </label>
 
-            {/* Colsto Cylindrical Envelope Pruning */}
+            {/* Cylindrical Envelope Pruning */}
             <label className="flex items-center justify-between text-xs text-slate-300 cursor-pointer">
               <div className="flex items-center gap-2">
                 <input
@@ -1011,13 +1235,13 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
                   }
                   className="accent-cyan-400 rounded cursor-pointer"
                 />
-                <span>Colsto Cylinder Pruning</span>
+                <span>Cylindrical Distance Pruning</span>
               </div>
               <span className="text-[10px] text-cyan-400 font-mono">15x speedup</span>
             </label>
           </div>
 
-          {/* Section 5: Run Calculation Button */}
+          {/* Section 6: Run Calculation Button */}
           <button
             onClick={handleRunSearch}
             disabled={isCalculating}
@@ -1027,7 +1251,7 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
             <span>
               {isCalculating
                 ? `Evaluating ${trajectories.length} Flights in Region...`
-                : `Correlate All ${trajectories.length} Area Flights`}
+                : `Correlate All ${trajectories.length} Region Flights`}
             </span>
           </button>
         </aside>

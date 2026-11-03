@@ -17,10 +17,10 @@ const TOOLS: ToolItem[] = [
     status: 'live',
   },
   {
-    id: 'colsto',
-    name: 'Colsto Geolocation Heatmap',
+    id: 'locator',
+    name: 'Doppler Flight Locator',
     tag: 'WASM DSP',
-    description: 'Invert aircraft Doppler curves against ADS-B flight trajectories to generate spatial ground observer likelihood heatmaps (Rust/WASM).',
+    description: 'Invert aircraft Doppler curves against regional ADS-B flight trajectories to find ground recording locations on an interactive map.',
     icon: 'radio',
     color: 'emerald',
     status: 'live',

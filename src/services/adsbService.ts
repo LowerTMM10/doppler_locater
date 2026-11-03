@@ -1,7 +1,7 @@
 import { FlightTrajectory, FlightWaypoint } from '../types';
 
 /**
- * Benchmark Flights with known ground truth locations for testing Colsto Geolocation
+ * Benchmark Flights with known ground truth locations for testing Doppler Geolocation
  */
 export const BENCHMARK_FLIGHTS: FlightTrajectory[] = [
   {

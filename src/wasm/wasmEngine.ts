@@ -153,10 +153,10 @@ async function getWasmModule(): Promise<{
 }
 
 /**
- * Main Colsto Doppler Geolocation Finder Algorithm
+ * Main Doppler Acoustic Geolocation Finder Algorithm
  * Evaluates candidate observer grid against 3D aircraft trajectory
  */
-export async function runColstoGeolocationSearch(
+export async function runDopplerGeolocationSearch(
   trajectory: FlightTrajectory,
   fittedParams: FittedParams,
   searchArea: SearchArea,
@@ -207,7 +207,7 @@ export async function runColstoGeolocationSearch(
   const inv2SigDistSq = 1 / (2 * sigmaDist * sigmaDist);
   const inv2SigTimeSq = 1 / (2 * sigmaTime * sigmaTime);
 
-  // Colsto Cylindrical Envelope Bound:
+  // Cylindrical Spatial Envelope Bound:
   // Points whose 2D distance to closest flight path projection is > targetDmin * 1.5
   // cannot physically match the closest distance metric.
   const pruneDistMaxSq = (targetDmin * 1.6) ** 2;
@@ -255,7 +255,7 @@ export async function runColstoGeolocationSearch(
         }
       }
 
-      // Colsto Cylindrical Pruning
+      // Cylindrical Spatial Pruning
       if (settings.spatialPruning && minDistSq > pruneDistMaxSq) {
         gridScores[idx] = 0;
         gridDmin[idx] = Math.sqrt(minDistSq);
@@ -370,7 +370,7 @@ export async function runColstoGeolocationSearch(
  * Searches ALL flights in the region against the measured Doppler curve
  * Correlates each flight and ranks them by likelihood
  */
-export async function runColstoMultiFlightSearch(
+export async function runMultiFlightGeolocationSearch(
   trajectories: FlightTrajectory[],
   fittedParams: FittedParams,
   searchArea: SearchArea,
@@ -449,4 +449,8 @@ export async function runColstoMultiFlightSearch(
     engineUsed,
   };
 }
+
+export const runColstoGeolocationSearch = runDopplerGeolocationSearch;
+export const runColstoMultiFlightSearch = runMultiFlightGeolocationSearch;
+
 
