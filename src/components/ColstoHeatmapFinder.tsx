@@ -98,9 +98,13 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
   const [searchResult, setSearchResult] = useState<ColstoSearchResult | null>(null);
   const [copiedCoords, setCopiedCoords] = useState(false);
 
+  // Map Tile Style (OpenStreetMap & Satellite)
+  const [mapStyle, setMapStyle] = useState<'osm_dark' | 'osm_standard' | 'satellite'>('osm_dark');
+
   // Leaflet Map Refs
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
+  const baseTileLayerRef = useRef<L.TileLayer | null>(null);
   const heatmapLayerRef = useRef<L.ImageOverlay | null>(null);
   const flightPathLayerRef = useRef<L.LayerGroup | null>(null);
   const markerLayerRef = useRef<L.LayerGroup | null>(null);
@@ -116,13 +120,6 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
       zoomControl: true,
     });
 
-    // Dark Matter tile layer
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
-      subdomains: 'abcd',
-      maxZoom: 19,
-    }).addTo(map);
-
     const flightGroup = L.layerGroup().addTo(map);
     const markersGroup = L.layerGroup().addTo(map);
 
@@ -135,6 +132,44 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
       mapInstanceRef.current = null;
     };
   }, []);
+
+  // Update Base Tile Layer when mapStyle changes (OpenStreetMap / Satellite)
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    if (baseTileLayerRef.current) {
+      map.removeLayer(baseTileLayerRef.current);
+      baseTileLayerRef.current = null;
+    }
+
+    let layer: L.TileLayer;
+
+    if (mapStyle === 'satellite') {
+      layer = L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        {
+          maxZoom: 19,
+          attribution: 'Tiles &copy; Esri &mdash; World Imagery',
+        }
+      );
+    } else if (mapStyle === 'osm_standard') {
+      layer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors',
+      });
+    } else {
+      // OpenStreetMap with Dark Filter (No API limits or third-party quota)
+      layer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        className: 'map-tiles-dark',
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors',
+      });
+    }
+
+    layer.addTo(map);
+    baseTileLayerRef.current = layer;
+  }, [mapStyle]);
 
   // Update Flight Path Layer on Map when Trajectory changes
   useEffect(() => {
@@ -494,6 +529,43 @@ export const ColstoHeatmapFinder: React.FC<ColstoHeatmapFinderProps> = ({
         {/* Left: Map Visualization Area */}
         <div className="flex-1 relative flex flex-col overflow-hidden bg-slate-950">
           <div ref={mapContainerRef} className="flex-1 w-full h-full relative z-10" />
+
+          {/* Map Layer Switcher (OpenStreetMap & Satellite) */}
+          <div className="absolute top-4 right-4 z-20 bg-slate-900/90 backdrop-blur-md border border-slate-800 p-1 rounded-lg flex items-center gap-1 text-[11px] font-mono shadow-xl pointer-events-auto">
+            <button
+              onClick={() => setMapStyle('osm_dark')}
+              className={`px-2.5 py-1 rounded transition ${
+                mapStyle === 'osm_dark'
+                  ? 'bg-cyan-500/25 text-cyan-300 font-semibold border border-cyan-500/40 shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="OpenStreetMap with Dark UI styling (100% free, zero limits)"
+            >
+              OSM Dark
+            </button>
+            <button
+              onClick={() => setMapStyle('osm_standard')}
+              className={`px-2.5 py-1 rounded transition ${
+                mapStyle === 'osm_standard'
+                  ? 'bg-cyan-500/25 text-cyan-300 font-semibold border border-cyan-500/40 shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="Standard OpenStreetMap tiles (100% free, zero limits)"
+            >
+              OSM Standard
+            </button>
+            <button
+              onClick={() => setMapStyle('satellite')}
+              className={`px-2.5 py-1 rounded transition ${
+                mapStyle === 'satellite'
+                  ? 'bg-cyan-500/25 text-cyan-300 font-semibold border border-cyan-500/40 shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="World Satellite Imagery"
+            >
+              Satellite
+            </button>
+          </div>
 
           {/* Floating Performance / Result Overlay Badge */}
           {searchResult && (

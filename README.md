@@ -44,7 +44,7 @@ Rewritten from the original LowerTMM10 Doppler detector into a high-performance 
      - **Custom Uploads**: Supports dump1090 JSON, readsb traces, and CSV formats.
      - **Benchmark Corridor Test Flights**: Instant verification test cases (Typhoon Fast Jet, B738 Heathrow approach, C172 Skyhawk).
    - **Configurable Grid Densities**: 40×40 (1,600 pts), 80×80 (6,400 pts), 160×160 (25,600 pts), and 300×300 (90,000 pts).
-   - **Interactive Leaflet Map**: Dark Matter tile maps, search area bounding box, glowing 3D flight trajectory waypoints, thermal likelihood heatmap, and top candidate reticle pin with one-click coordinate copy.
+   - **Interactive Leaflet Map**: OpenStreetMap tile maps (OSM Dark, OSM Standard, and World Satellite Imagery), search area bounding box, glowing 3D flight trajectory waypoints, thermal likelihood heatmap, and top candidate reticle pin with one-click coordinate copy.
 
 6. **Tool Directory & Data Export**:
    - Integrated tools catalog with real-time search.

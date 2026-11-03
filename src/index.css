@@ -34,3 +34,9 @@ canvas {
   position: relative;
   cursor: crosshair;
 }
+
+/* OpenStreetMap Dark Filter (Zero third-party limit) */
+.map-tiles-dark {
+  filter: invert(100%) hue-rotate(180deg) brightness(88%) contrast(92%);
+}
+
