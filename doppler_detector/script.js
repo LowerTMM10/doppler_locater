@@ -60,6 +60,41 @@
             fittedParams: null // { f0, v, dmin, t0 }
         };
 
+        // --- Zoomable view window (time & frequency shown on screen) ---
+        const view = { t0: 0, t1: 1, f0: 0, f1: 3000 };
+        const MIN_VIEW_SECONDS = 0.5, MIN_VIEW_HZ = 100;
+        function viewMaxHz() { return Math.min(state.sampleRate / 2, 12000); }
+        function tToX(t, w) { return ((t - view.t0) / (view.t1 - view.t0)) * w; }
+        function xToT(x, w) { return view.t0 + (x / w) * (view.t1 - view.t0); }
+        function fToY(f, h) { return h * (1 - (f - view.f0) / (view.f1 - view.f0)); }
+        function yToF(y, h) { return view.f0 + (1 - y / h) * (view.f1 - view.f0); }
+        function timeToFrame(t) {
+            const n = state.spectrogramData.length;
+            const times = state.spectrogramTimes;
+            if (!state.isMicActive && times && times.length === n && n > 1) {
+                const hop = times[1] - times[0];
+                return Math.round((t - times[0]) / hop);
+            }
+            return Math.floor((t / (state.duration || 1)) * n);
+        }
+        function clampView() {
+            const dur = state.duration || 1;
+            let span = Math.min(dur, Math.max(MIN_VIEW_SECONDS, view.t1 - view.t0));
+            view.t0 = Math.max(0, Math.min(dur - span, view.t0));
+            view.t1 = view.t0 + span;
+            const top = viewMaxHz();
+            let fspan = Math.min(top, Math.max(MIN_VIEW_HZ, view.f1 - view.f0));
+            view.f0 = Math.max(0, Math.min(top - fspan, view.f0));
+            view.f1 = view.f0 + fspan;
+            state.maxHz = view.f1;
+            if (typeof updateViewUI === 'function') updateViewUI();
+        }
+        function resetView() {
+            view.t0 = 0; view.t1 = state.duration || 1;
+            view.f0 = 0; view.f1 = Math.min(3000, viewMaxHz());
+            clampView();
+        }
+
         // DOM Elements
         const spectrogramCanvas = document.getElementById('spectrogramCanvas');
         const overlayCanvas = document.getElementById('overlayCanvas');
@@ -78,8 +113,6 @@
         const totalTimeDisplay = document.getElementById('totalTimeDisplay');
 
         const fftSelect = document.getElementById('fftSelect');
-        const maxHzSlider = document.getElementById('maxHzSlider');
-        const maxHzVal = document.getElementById('maxHzVal');
         const paletteSelect = document.getElementById('paletteSelect');
         const gainSlider = document.getElementById('gainSlider');
         const gainVal = document.getElementById('gainVal');
@@ -160,7 +193,10 @@
             const pcmData = state.audioBuffer.getChannelData(0);
             const numSamples = pcmData.length;
             const fftSize = parseInt(state.fftSize);
-            const hopSize = Math.floor(fftSize / 4); // 75% overlap for crisp resolution
+            // 75% overlap normally; for long recordings (e.g. 1 hour) use a bigger hop
+            // so memory stays around 160 MB of spectrum data.
+            const maxFrames = Math.floor(40e6 / (fftSize / 2));
+            const hopSize = Math.max(Math.floor(fftSize / 4), Math.ceil((numSamples - fftSize) / maxFrames));
             const numFrames = Math.floor((numSamples - fftSize) / hopSize);
 
             state.spectrogramData = [];
@@ -201,6 +237,7 @@
                 state.spectrogramTimes.push((offset + fftSize / 2) / state.sampleRate);
             }
 
+            resetView();
             renderSpectrogram();
             renderOverlay();
         }
@@ -315,10 +352,11 @@
             overCtx.font = '10px monospace';
 
             // Frequency horizontal gridlines
-            const maxHz = state.maxHz;
-            const stepHz = maxHz > 5000 ? 1000 : (maxHz > 2000 ? 500 : 100);
-            for (let hz = stepHz; hz < maxHz; hz += stepHz) {
-                const y = height * (1 - hz / maxHz);
+            const fSpan = view.f1 - view.f0;
+            const stepHz = niceStep(fSpan / 6, [10, 20, 50, 100, 200, 250, 500, 1000, 2000]);
+            for (let hz = Math.ceil(view.f0 / stepHz) * stepHz; hz < view.f1; hz += stepHz) {
+                if (hz <= view.f0) continue;
+                const y = fToY(hz, height);
                 overCtx.beginPath();
                 overCtx.moveTo(0, y);
                 overCtx.lineTo(width, y);
@@ -328,14 +366,15 @@
 
             // Time vertical gridlines
             if (state.duration > 0) {
-                const timeStep = state.duration > 30 ? 10 : (state.duration > 10 ? 2 : 0.5);
-                for (let t = timeStep; t < state.duration; t += timeStep) {
-                    const x = (t / state.duration) * width;
+                const timeStep = niceStep((view.t1 - view.t0) / 8, [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600]);
+                for (let t = Math.ceil(view.t0 / timeStep) * timeStep; t < view.t1; t += timeStep) {
+                    if (t <= view.t0) continue;
+                    const x = tToX(t, width);
                     overCtx.beginPath();
                     overCtx.moveTo(x, 0);
                     overCtx.lineTo(x, height);
                     overCtx.stroke();
-                    overCtx.fillText(`${t.toFixed(1)}s`, x + 4, height - 8);
+                    overCtx.fillText(t >= 60 ? formatTime(t) : `${t.toFixed(1)}s`, x + 4, height - 8);
                 }
             }
 
@@ -343,7 +382,7 @@
             if (state.duration > 0) {
                 const currentT = state.isPlaying ? 
                     (state.audioCtx.currentTime - state.startTime) : state.pauseOffset;
-                const playX = (currentT / state.duration) * width;
+                const playX = tToX(currentT, width);
 
                 overCtx.strokeStyle = '#00f2fe';
                 overCtx.lineWidth = 2;
@@ -362,14 +401,14 @@
 
                 let first = true;
                 for (let x = 0; x < width; x += 2) {
-                    const t = (x / width) * state.duration;
+                    const t = xToT(x, width);
                     const deltaT = t - t0;
                     
                     // Doppler Equation: f(t) = f0 * (1 - (v/c) * (v * deltaT / sqrt(dmin^2 + v^2 * deltaT^2)))
                     const distRatio = (v * deltaT) / Math.sqrt(dmin * dmin + v * v * deltaT * deltaT);
                     const freq = f0 * (1.0 - (v / SPEED_OF_SOUND) * distRatio);
 
-                    const y = height * (1 - freq / maxHz);
+                    const y = fToY(freq, height);
 
                     if (y >= 0 && y <= height) {
                         if (first) {
@@ -385,8 +424,8 @@
 
             // Draw Plotted Landmark Points
             state.plottedPoints.forEach((pt, idx) => {
-                const x = (pt.t / state.duration) * width;
-                const y = height * (1 - pt.f / maxHz);
+                const x = tToX(pt.t, width);
+                const y = fToY(pt.f, height);
 
                 // Point Marker Outer Ring
                 overCtx.fillStyle = '#7c3aed';
@@ -416,15 +455,15 @@
             const width = overlayCanvas.width;
             const height = overlayCanvas.height;
 
-            const hoverT = (mouseX / width) * (state.duration || 1);
-            const hoverF = (1 - mouseY / height) * state.maxHz;
+            const hoverT = xToT(mouseX, width);
+            const hoverF = yToF(mouseY, height);
 
             hoverTime.textContent = `${hoverT.toFixed(2)} s`;
             hoverFreq.textContent = `${Math.round(hoverF)} Hz`;
 
             // Sample magnitude under cursor if data ready
             if (state.spectrogramData.length > 0) {
-                const frameIdx = Math.floor((mouseX / width) * state.spectrogramData.length);
+                const frameIdx = timeToFrame(hoverT);
                 const spectrum = state.spectrogramData[frameIdx];
                 if (spectrum) {
                     const binIdx = Math.floor((hoverF / (state.sampleRate / 2)) * spectrum.length);
@@ -435,7 +474,7 @@
         });
 
         overlayCanvas.addEventListener('click', (e) => {
-            if (!state.duration) return;
+            if (!state.duration || viewDragMoved) return;
 
             const rect = overlayCanvas.getBoundingClientRect();
             const mouseX = e.clientX - rect.left;
@@ -444,8 +483,8 @@
             const width = overlayCanvas.width;
             const height = overlayCanvas.height;
 
-            const pointTime = (mouseX / width) * state.duration;
-            const pointFreq = (1 - mouseY / height) * state.maxHz;
+            const pointTime = xToT(mouseX, width);
+            const pointFreq = yToF(mouseY, height);
 
             // Add point
             state.plottedPoints.push({ t: pointTime, f: pointFreq });
@@ -534,12 +573,6 @@
             if (state.audioBuffer) computeOfflineSpectrogram();
         });
 
-        maxHzSlider.addEventListener('input', (e) => {
-            state.maxHz = parseInt(e.target.value);
-            maxHzVal.textContent = `${state.maxHz} Hz`;
-            renderSpectrogram();
-            renderOverlay();
-        });
 
         paletteSelect.addEventListener('change', (e) => {
             state.palette = e.target.value;
@@ -620,6 +653,11 @@
             }
 
             state.pauseOffset = currentT;
+            if (currentT > view.t1 || currentT < view.t0) {
+                const span = view.t1 - view.t0;
+                view.t0 = currentT - span * 0.1; view.t1 = view.t0 + span;
+                clampView(); renderSpectrogram();
+            }
             seekSlider.value = (currentT / state.duration) * 100;
             currentTimeDisplay.textContent = formatTime(currentT);
             renderOverlay();
@@ -658,6 +696,7 @@
 
                 state.spectrogramData = [];
                 state.duration = 20; // 20s sliding window for live mic
+                view.t0 = 0; view.t1 = 20; clampView();
                 totalTimeDisplay.textContent = "Live Stream";
                 audioStatus.textContent = "Microphone Active";
                 audioStatus.className = "text-xs text-rose-400 font-mono animate-pulse";
@@ -743,3 +782,99 @@
         window.onload = () => {
             resizeCanvases();
         };
+
+        function niceStep(raw, steps) {
+            for (const st of steps) if (st >= raw) return st;
+            return steps[steps.length - 1];
+        }
+
+        // --- Zoom & scroll interaction ---
+        const viewScroll = document.getElementById('viewScroll');
+        const viewInfo = document.getElementById('viewInfo');
+        let viewDragMoved = false;
+
+        function updateViewUI() {
+            const dur = state.duration || 1;
+            const span = view.t1 - view.t0;
+            const free = Math.max(0, dur - span);
+            viewScroll.disabled = free <= 0;
+            viewScroll.value = free > 0 ? Math.round((view.t0 / free) * 1000) : 0;
+            viewInfo.textContent = `${span >= 60 ? formatTime(span) : span.toFixed(1) + 's'} · ${Math.round(view.f0)}–${Math.round(view.f1)} Hz`;
+        }
+        function redrawView() { clampView(); renderSpectrogram(); renderOverlay(); }
+
+        function zoomTime(factor, anchorT) {
+            const span = view.t1 - view.t0;
+            const next = span * factor;
+            const r = (anchorT - view.t0) / span;
+            view.t0 = anchorT - r * next; view.t1 = view.t0 + next;
+            redrawView();
+        }
+        function zoomFreq(factor, anchorF) {
+            const span = view.f1 - view.f0;
+            const next = span * factor;
+            const r = (anchorF - view.f0) / span;
+            view.f0 = anchorF - r * next; view.f1 = view.f0 + next;
+            redrawView();
+        }
+
+        overlayCanvas.addEventListener('wheel', (e) => {
+            if (!state.duration) return;
+            e.preventDefault();
+            const rect = overlayCanvas.getBoundingClientRect();
+            const w = overlayCanvas.width, h = overlayCanvas.height;
+            const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1;
+            const dx = e.deltaX * unit, dy = e.deltaY * unit;
+            // Trackpad sideways swipe = scroll through time
+            if (Math.abs(dx) > Math.abs(dy) && !e.shiftKey) {
+                const shift = (dx / w) * (view.t1 - view.t0);
+                view.t0 += shift; view.t1 += shift;
+                redrawView();
+                return;
+            }
+            const factor = Math.exp(dy * 0.0015);
+            if (e.shiftKey) zoomFreq(Math.exp((dy || dx) * 0.0015), yToF(e.clientY - rect.top, h));
+            else zoomTime(factor, xToT(e.clientX - rect.left, w));
+        }, { passive: false });
+
+        // Drag to pan (a click without moving still plots a point)
+        overlayCanvas.addEventListener('mousedown', (e) => {
+            if (!state.duration || e.button !== 0) return;
+            const startX = e.clientX, startY = e.clientY;
+            const v0 = { ...view };
+            const w = overlayCanvas.width, h = overlayCanvas.height;
+            viewDragMoved = false;
+            const move = (ev) => {
+                const ddx = ev.clientX - startX, ddy = ev.clientY - startY;
+                if (!viewDragMoved && Math.hypot(ddx, ddy) < 4) return;
+                viewDragMoved = true;
+                overlayCanvas.style.cursor = 'grabbing';
+                const dt = (ddx / w) * (v0.t1 - v0.t0);
+                const df = (ddy / h) * (v0.f1 - v0.f0);
+                view.t0 = v0.t0 - dt; view.t1 = v0.t1 - dt;
+                view.f0 = v0.f0 + df; view.f1 = v0.f1 + df;
+                redrawView();
+            };
+            const up = () => {
+                window.removeEventListener('mousemove', move);
+                window.removeEventListener('mouseup', up);
+                overlayCanvas.style.cursor = '';
+                setTimeout(() => { viewDragMoved = false; }, 0);
+            };
+            window.addEventListener('mousemove', move);
+            window.addEventListener('mouseup', up);
+        });
+
+        viewScroll.addEventListener('input', () => {
+            const span = view.t1 - view.t0;
+            const free = Math.max(0, (state.duration || 1) - span);
+            view.t0 = (viewScroll.value / 1000) * free; view.t1 = view.t0 + span;
+            redrawView();
+        });
+
+        const centerT = () => (view.t0 + view.t1) / 2;
+        document.getElementById('zoomInBtn').addEventListener('click', () => zoomTime(0.5, centerT()));
+        document.getElementById('zoomOutBtn').addEventListener('click', () => zoomTime(2, centerT()));
+        document.getElementById('fZoomInBtn').addEventListener('click', () => zoomFreq(0.5, (view.f0 + view.f1) / 2));
+        document.getElementById('resetViewBtn').addEventListener('click', () => { resetView(); renderSpectrogram(); renderOverlay(); });
+        updateViewUI();

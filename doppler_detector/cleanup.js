@@ -97,10 +97,10 @@ renderSpectrogram = function () {
     let counted = 0;
 
     for (let x = 0; x < width; x++) {
-        const spectrum = state.spectrogramData[Math.floor((x / width) * numFrames)];
+        const spectrum = state.spectrogramData[timeToFrame(xToT(x, width))];
         if (!spectrum) continue;
         for (let y = 0; y < height; y++) {
-            const freqHz = (1 - y / height) * maxHz;
+            const freqHz = yToF(y, height);
             const binIdx = Math.floor((freqHz / nyquist) * fftBins);
             let mag = 0;
             if (binIdx >= 0 && binIdx < fftBins) mag = cleanMag(spectrum, binIdx, binHz, prof) * gain;
@@ -149,14 +149,17 @@ function detectRidge() {
     const nyquist = state.sampleRate / 2;
     const binHz = nyquist / bins;
     const prof = cleanup.noiseSub ? ensureNoiseProfile() : null;
-    const lo = Math.max(1, Math.floor((cleanup.bandpass ? cleanup.lowHz : 50) / binHz));
-    const hi = Math.min(bins - 2, Math.ceil(Math.min(state.maxHz, cleanup.bandpass ? cleanup.highHz : nyquist) / binHz));
+    // Only search what is visible on screen (time and frequency)
+    const lo = Math.max(1, Math.floor(Math.max(view.f0, cleanup.bandpass ? cleanup.lowHz : 50) / binHz));
+    const hi = Math.min(bins - 2, Math.ceil(Math.min(view.f1, cleanup.bandpass ? cleanup.highHz : nyquist) / binHz));
+    const fStart = Math.max(0, timeToFrame(view.t0));
+    const fEnd = Math.min(data.length, timeToFrame(view.t1) + 1);
     if (hi <= lo + 2) return [];
 
     const raw = [];
-    const step = Math.max(1, Math.floor(data.length / 600)); // cap work
+    const step = Math.max(1, Math.floor((fEnd - fStart) / 600)); // cap work
     const band = new Float32Array(hi - lo + 1);
-    for (let f = 0; f < data.length; f += step) {
+    for (let f = fStart; f < fEnd; f += step) {
         const s = data[f];
         let best = -1, bestV = 0;
         for (let i = lo; i <= hi; i++) {
@@ -317,7 +320,7 @@ renderOverlay = function () {
 
     overCtx.fillStyle = 'rgba(251, 113, 133, 0.55)';
     for (const p of cleanup.ridge) {
-        overCtx.fillRect((p.t / dur) * width - 1, height * (1 - p.f / maxHz) - 1, 2, 2);
+        overCtx.fillRect(tToX(p.t, width) - 1, fToY(p.f, height) - 1, 2, 2);
     }
 
     const fit = cleanup.autoFit;
@@ -328,13 +331,13 @@ renderOverlay = function () {
     overCtx.beginPath();
     let first = true;
     for (let x = 0; x < width; x += 2) {
-        const y = height * (1 - (fit.f0 * dopplerShape((x / width) * dur, fit.v, fit.dmin, fit.t0)) / maxHz);
+        const y = fToY(fit.f0 * dopplerShape(xToT(x, width), fit.v, fit.dmin, fit.t0), height);
         if (y < 0 || y > height) { first = true; continue; }
         if (first) { overCtx.moveTo(x, y); first = false; } else overCtx.lineTo(x, y);
     }
     overCtx.stroke();
     overCtx.setLineDash([]);
-    const cx = (fit.t0 / dur) * width;
+    const cx = tToX(fit.t0, width);
     overCtx.fillStyle = '#ef4444';
     overCtx.font = 'bold 11px monospace';
     overCtx.fillText(`AUTO ${Math.round(fit.v * 3.6)} km/h · ${(fit.score * 100).toFixed(0)}%`, cx + 8, 16);

@@ -92,18 +92,19 @@
                     </select>
                 </div>
 
-                <!-- Max Hz Zoom -->
+                <!-- Zoom & Scroll -->
                 <div>
                     <div class="flex justify-between text-xs mb-1">
-                        <label class="text-slate-300">Max Frequency Ceiling</label>
-                        <span id="maxHzVal" class="font-mono text-cyan-400 text-xs">3000 Hz</span>
+                        <label class="text-slate-300">Zoom &amp; Scroll</label>
+                        <span id="viewInfo" class="font-mono text-cyan-400 text-[10px]">--</span>
                     </div>
-                    <input type="range" id="maxHzSlider" min="500" max="12000" step="250" value="3000" class="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-400">
-                    <div class="flex justify-between text-[10px] text-slate-500 font-mono mt-0.5">
-                        <span>500 Hz</span>
-                        <span>Jet Engine Focus</span>
-                        <span>12 kHz</span>
+                    <div class="grid grid-cols-4 gap-1.5">
+                        <button id="zoomInBtn" title="Zoom in (time)" class="bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-md py-1 text-xs text-slate-200"><i class="fa-solid fa-magnifying-glass-plus"></i></button>
+                        <button id="zoomOutBtn" title="Zoom out (time)" class="bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-md py-1 text-xs text-slate-200"><i class="fa-solid fa-magnifying-glass-minus"></i></button>
+                        <button id="fZoomInBtn" title="Zoom in (frequency)" class="bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-md py-1 text-xs text-slate-200"><i class="fa-solid fa-arrows-up-down"></i>+</button>
+                        <button id="resetViewBtn" title="Show everything" class="bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-md py-1 text-xs text-slate-200"><i class="fa-solid fa-expand"></i></button>
                     </div>
+                    <p class="text-[10px] text-slate-500 font-mono mt-1.5 leading-relaxed">Scroll wheel: zoom time · Shift + wheel: zoom frequency · Drag: move around · Click: plot point</p>
                 </div>
 
                 <!-- Color Palette -->
@@ -226,6 +227,10 @@
                     <canvas id="overlayCanvas" class="absolute inset-0 w-full h-full block z-10 pointer-events-auto"></canvas>
                 </div>
 
+                <!-- Horizontal scroll bar for the time view -->
+                <div class="bg-slate-900 border-t border-slate-800 px-4 py-1.5 z-20">
+                    <input type="range" id="viewScroll" min="0" max="1000" value="0" step="1" class="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-400">
+                </div>
                 <!-- Hover Telemetry Bar -->
                 <div class="bg-slate-900 border-t border-slate-800 px-4 py-2 flex items-center justify-between text-xs font-mono text-slate-400 z-20">
                     <div class="flex items-center space-x-6">
