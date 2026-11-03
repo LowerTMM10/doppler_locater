@@ -1,5 +1,0 @@
-[[redirects]]
-  from = "http://doppler.lowertmm10.uk/*"
-  to = "https://doppler.lowertmm10.uk/:splat"
-  status = 301
-  force = true

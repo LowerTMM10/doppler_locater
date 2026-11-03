@@ -1,0 +1,6 @@
+{
+  "name": "AeroDoppler OSINT DSP",
+  "description": "Aircraft Audio Doppler Spectrum Extractor, Flight Path Analyzer & Signal DSP Toolkit",
+  "permissions": [],
+  "capabilities": []
+}
