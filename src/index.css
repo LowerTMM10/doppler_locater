@@ -2,8 +2,6 @@
 @tailwind components;
 @tailwind utilities;
 
-@import "leaflet/dist/leaflet.css";
-
 
 body {
   background-color: #0a0d14;
