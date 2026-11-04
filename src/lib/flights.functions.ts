@@ -124,17 +124,28 @@ export const fetchHistoricalFlights = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => Input.parse(d))
   .handler(async ({ data }) => {
     if (data.endUnix - data.startUnix > 2 * 3600) throw new Error("Time window too long (max 2 hours).");
-    if ((data.maxLat - data.minLat) * (data.maxLon - data.minLon) > 4) throw new Error("Search area too large. Zoom in a bit.");
-
+    // No area limit: the archive is worldwide anyway. For big areas we thin
+    // track points and keep the most complete tracks so the response stays small.
     let source = "adsb.lol history archive";
     let { flights, slots } = await fromHeatmaps(data);
     if (slots === 0) {
       flights = await fromLiveTraces(data);
       source = "adsb.lol live traces (archive for this time isn't published yet)";
     }
-    const list = [...flights.values()]
+    const MAX_FLIGHTS = 1500;
+    const MAX_POINTS_TOTAL = 120_000;
+    let list = [...flights.values()]
       .filter((f) => f.points.length >= 2)
-      .map((f) => ({ ...f, points: f.points.sort((a, b) => a.t - b.t) }))
-      .slice(0, 400);
+      .sort((a, b) => b.points.length - a.points.length)
+      .slice(0, MAX_FLIGHTS)
+      .map((f) => ({ ...f, points: f.points.sort((a, b) => a.t - b.t) }));
+    const total = list.reduce((s, f) => s + f.points.length, 0);
+    if (total > MAX_POINTS_TOTAL) {
+      const step = Math.ceil(total / MAX_POINTS_TOTAL);
+      list = list.map((f) => ({
+        ...f,
+        points: f.points.filter((_, i) => i % step === 0 || i === f.points.length - 1),
+      }));
+    }
     return { flights: list, source };
   });
